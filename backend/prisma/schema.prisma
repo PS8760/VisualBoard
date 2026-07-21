@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model board_members {
+  id         Int       @id(map: "bord_members_pkey") @default(autoincrement())
+  user_id    Int
+  board_id   Int
+  role       String    @default("viewer") @db.VarChar(20)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  boards     boards    @relation(fields: [board_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_member_board")
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_member_user")
+
+  @@unique([user_id, board_id], map: "unique_board_member")
+}
+
+model boards {
+  id            Int             @id @default(autoincrement())
+  title         String          @db.VarChar(255)
+  description   String?
+  owner_id      Int
+  created_at    DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at    DateTime?       @default(now()) @db.Timestamp(6)
+  board_members board_members[]
+  users         users           @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_board_owner")
+  comments      comments[]
+  elements      elements[]
+  versions      versions[]
+}
+
+model comments {
+  id         Int       @id @default(autoincrement())
+  board_id   Int
+  user_id    Int
+  content    String
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+  boards     boards    @relation(fields: [board_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_comment_board")
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_comment_user")
+}
+
+model elements {
+  id           Int       @id @default(autoincrement())
+  board_id     Int
+  element_data Json
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at   DateTime? @default(now()) @db.Timestamp(6)
+  boards       boards    @relation(fields: [board_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_element_board")
+}
+
+model users {
+  id            Int             @id @default(autoincrement())
+  name          String          @db.VarChar(100)
+  email         String          @unique @db.VarChar(255)
+  password      String          @db.VarChar(255)
+  avatar        String?
+  created_at    DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at    DateTime?       @default(now()) @db.Timestamp(6)
+  board_members board_members[]
+  boards        boards[]
+  comments      comments[]
+  versions      versions[]
+}
+
+model versions {
+  id         Int       @id @default(autoincrement())
+  board_id   Int
+  snapshot   Json
+  created_by Int
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  boards     boards    @relation(fields: [board_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_version_board")
+  users      users     @relation(fields: [created_by], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_version_user")
+}
