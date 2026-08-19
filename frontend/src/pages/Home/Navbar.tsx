@@ -1,34 +1,128 @@
-import Button from "../../components/ui/Button";
-import Container from "../../components/ui/container";
-import Logo from "../../components/ui/Logo";
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import Logo from '../../components/ui/Logo';
+import { Button } from '../../components/ui/Button';
+import { useAuthStore } from '../../stores/useAuthStore';
+import { cn } from '../../utils';
+import { useSmoothScroll } from '../../hooks/useSmoothScroll';
+
+const NAV_LINKS = [
+  { label: 'Product', href: '#product' },
+  { label: 'Features', href: '#features' },
+  { label: 'Collaboration', href: '#collaboration' },
+  { label: 'Documentation', href: '#documentation' },
+];
 
 export default function Navbar() {
+  const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
-    return (
-        <>
-            <header className="border-b border-zinc-900">
-                <Container>
-                    <nav className="h-20 flex items-center justify-between">
-                        <Logo />
-                        <div className="hidden md:flex items-center gap-8 text-zinc-400">
-                            <a href="#">Product</a>
-                            <a href="#">Features</a>
-                            <a href="#">Templates</a>
-                            <a href="#">Pricing</a>
-                        </div>
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 24);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
-                        <div className="flex items-center gap-3">
-                            <button className="text-zinc-300">
-                                Login
-                            </button>
+  useSmoothScroll(!menuOpen);
 
-                            <Button>
-                                Get Started
-                            </Button>
-                        </div>
-                    </nav>
-                </Container>
-            </header>
-        </>
-    )
+  return (
+    <header
+      className={cn(
+        'fixed inset-x-0 top-0 z-50 transition-all duration-300',
+        scrolled
+          ? 'border-b border-line bg-paper/85 backdrop-blur-md shadow-xs'
+          : 'border-b border-transparent bg-transparent',
+      )}
+    >
+      <nav
+        className={cn(
+          'mx-auto flex max-w-[1200px] items-center justify-between px-5 transition-all duration-300 md:px-8',
+          scrolled ? 'h-14' : 'h-16 md:h-[72px]',
+        )}
+        aria-label="Primary"
+      >
+        <Link to="/" className="shrink-0" aria-label="VisualBoard home">
+          <Logo size={scrolled ? 'sm' : 'md'} />
+        </Link>
+
+        <div className="hidden items-center gap-1 md:flex">
+          {NAV_LINKS.map((link) => (
+            <a
+              key={link.label}
+              href={link.href}
+              className="group relative rounded-md px-3 py-1.5 text-[13.5px] font-medium text-ink-2 transition-colors duration-150 hover:text-ink"
+            >
+              {link.label}
+              <span className="absolute inset-x-3 -bottom-0.5 h-px scale-x-0 bg-ink transition-transform duration-200 group-hover:scale-x-100" />
+            </a>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {useAuthStore((s) => Boolean(s.user)) ? (
+            <>
+              <Link to="/dashboard" className="hidden sm:block">
+                <Button variant="ghost" size="sm" className="font-medium">
+                  Dashboard
+                </Button>
+              </Link>
+              <Link to="/profile">
+                <Button size="sm" className="font-medium">
+                  Profile
+                </Button>
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link to="/login" className="hidden sm:block">
+                <Button variant="ghost" size="sm" className="font-medium">
+                  Login
+                </Button>
+              </Link>
+              <Link to="/register">
+                <Button size="sm" className="font-medium">
+                  Get Started
+                </Button>
+              </Link>
+            </>
+          )}
+          <button
+            className="ml-1 flex h-8 w-8 items-center justify-center rounded-md border border-line text-ink-2 md:hidden"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-label="Toggle navigation menu"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              {menuOpen ? (
+                <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              ) : (
+                <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              )}
+            </svg>
+          </button>
+        </div>
+      </nav>
+
+      {menuOpen && (
+        <div className="border-b border-line bg-paper px-5 pb-4 pt-2 md:hidden">
+          {NAV_LINKS.map((link) => (
+            <a
+              key={link.label}
+              href={link.href}
+              onClick={() => setMenuOpen(false)}
+              className="block rounded-md px-3 py-2 text-sm font-medium text-ink-2 hover:bg-paper-2 hover:text-ink"
+            >
+              {link.label}
+            </a>
+          ))}
+          <Link to="/login" onClick={() => setMenuOpen(false)}>
+            <Button variant="secondary" size="sm" className="mt-2 w-full">
+              Login
+            </Button>
+          </Link>
+        </div>
+      )}
+    </header>
+  );
 }

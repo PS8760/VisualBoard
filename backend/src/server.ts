@@ -1,10 +1,26 @@
-import "dotenv/config"
-import app from "./app";
+import http from 'node:http';
+import { env } from './config/env.js';
+import app from './app.js';
+import initSocket from './modules/socket/socket.js';
+import { logger } from './utils/logger.js';
 
-//PORT declaration
-const PORT = process.env.PORT || 4000;
+const PORT = env.PORT;
 
-app.listen(PORT, () => {
-    console.log(`Serving at http://localhost:${PORT}`);
+const server = http.createServer(app);
 
-})
+initSocket(server);
+
+server.listen(PORT, () => {
+  logger.info(`visualboard api listening on http://localhost:${PORT}`);
+});
+
+const shutdown = (signal: string) => {
+  logger.info({ signal }, 'shutting down');
+  server.close(() => {
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

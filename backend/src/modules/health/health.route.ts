@@ -1,9 +1,9 @@
-import { Router } from "express";
-import { databasehealthCheck, healthCheck } from "./health.controller";
+import { Router } from 'express';
+import { healthCheck, readinessCheck } from './health.controller.js';
 
 const healthRoutes = Router();
 
-healthRoutes.get("/health", healthCheck)
-healthRoutes.get("/db", databasehealthCheck)
+healthRoutes.get('/health', healthCheck);
+healthRoutes.get('/health/ready', readinessCheck);
 
 export default healthRoutes;

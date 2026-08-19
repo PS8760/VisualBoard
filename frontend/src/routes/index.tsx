@@ -1,21 +1,61 @@
-import { createBrowserRouter } from "react-router-dom";
-
+import { createBrowserRouter, Navigate } from 'react-router-dom';
+import Home from '../pages/Home/Home';
+import Login from '../pages/Login';
+import Register from '../pages/Register';
+import Board from '../pages/Board/Board';
+import Dashboard from '../pages/Dashboard';
+import Profile from '../pages/Profile';
+import GithubCallback from '../pages/Auth/GithubCallback';
+import GoogleCallback from '../pages/Auth/GoogleCallback';
+import ProtectedRoute from '../components/ProtectedRoute';
 
 export const router = createBrowserRouter([
-    {
-        path: "/",
-        element: <h1>Home Page</h1>
-    },
-    {
-        path: "/login",
-        element: <h1>Login Page</h1>
-    },
-    {
-        path: "/register",
-        element: <h1>Register Page</h1>
-    },
-    {
-        path: "/board/:id",
-        element: <h1>Board Pagee</h1>
-    }
+  {
+    path: '/',
+    element: <Home />,
+  },
+  {
+    path: '/login',
+    element: <Login />,
+  },
+  {
+    path: '/register',
+    element: <Register />,
+  },
+  {
+    path: '/dashboard',
+    element: (
+      <ProtectedRoute>
+        <Dashboard />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/profile',
+    element: (
+      <ProtectedRoute>
+        <Profile />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/board/:id',
+    element: (
+      <ProtectedRoute>
+        <Board />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/auth/github/callback',
+    element: <GithubCallback />,
+  },
+  {
+    path: '/auth/google/callback',
+    element: <GoogleCallback />,
+  },
+  {
+    path: '*',
+    element: <Navigate to="/" replace />,
+  },
 ]);
