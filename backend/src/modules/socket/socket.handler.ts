@@ -8,6 +8,7 @@ import {
   elementUpdateSchema,
   elementDeleteSchema,
   commentCreateSchema,
+  commentDeleteSchema,
 } from './socket.validation.js';
 import { getBoardRole } from '../../services/rbac.js';
 import {
@@ -15,8 +16,10 @@ import {
   updateElement,
   deleteElement,
 } from '../element/element.service.js';
-import { createComment } from '../comment/comment.service.js';
+import { createComment, deleteComment } from '../comment/comment.service.js';
+import { getStorage } from '../../services/storage/index.js';
 import { logger } from '../../utils/logger.js';
+import { uid } from '../../utils/id.js';
 import type { AuthenticatedSocket } from './socket.types.js';
 
 export const handleConnection = (io: Server, socket: AuthenticatedSocket) => {
@@ -76,8 +79,8 @@ export const handleConnection = (io: Server, socket: AuthenticatedSocket) => {
     }
 
     try {
-      const row = await createElement(boardId, element, String(element.id ?? crypto.randomUUID()));
-      io.to(roomOf(boardId)).emit(SocketEvents.ELEMENT_CREATED, { boardId, element: row.element_data });
+      const row = await createElement(boardId, element, typeof element.id === 'string' && element.id ? element.id : uid('el'));
+      socket.to(roomOf(boardId)).emit(SocketEvents.ELEMENT_CREATED, { boardId, element: row.element_data });
     } catch (err) {
       logger.warn({ err, boardId }, 'socket element:create failed');
       socket.emit(SocketEvents.ERROR, { message: 'Element could not be saved' });
@@ -95,11 +98,8 @@ export const handleConnection = (io: Server, socket: AuthenticatedSocket) => {
     }
 
     try {
-      const row = await updateElement(id, patch);
-      if (row.board_id !== boardId) {
-        return socket.emit(SocketEvents.ERROR, { message: 'Element does not belong to this board' });
-      }
-      io.to(roomOf(boardId)).emit(SocketEvents.ELEMENT_UPDATED, { boardId, id, patch });
+      const row = await updateElement(boardId, id, patch);
+      socket.to(roomOf(boardId)).emit(SocketEvents.ELEMENT_UPDATED, { boardId, id, patch, element: row.element_data });
     } catch (err) {
       logger.warn({ err, boardId, id }, 'socket element:update failed');
       socket.emit(SocketEvents.ERROR, { message: 'Element could not be updated' });
@@ -117,9 +117,14 @@ export const handleConnection = (io: Server, socket: AuthenticatedSocket) => {
     }
 
     try {
-      await deleteElement(id);
-      io.to(roomOf(boardId)).emit(SocketEvents.ELEMENT_REMOVED, { boardId, id });
-    } catch {
+      const removedDocKeys = await deleteElement(boardId, id);
+      const storage = getStorage();
+      for (const key of removedDocKeys) {
+        await storage.delete(key).catch(() => undefined);
+      }
+      socket.to(roomOf(boardId)).emit(SocketEvents.ELEMENT_REMOVED, { boardId, id });
+    } catch (err) {
+      logger.warn({ err, boardId, id }, 'socket element:delete failed');
       socket.emit(SocketEvents.ERROR, { message: 'Element could not be deleted' });
     }
   });
@@ -128,7 +133,7 @@ export const handleConnection = (io: Server, socket: AuthenticatedSocket) => {
     const parsed = commentCreateSchema.safeParse(raw);
     if (!parsed.success) return socket.emit(SocketEvents.ERROR, { message: 'Invalid comment:create payload' });
 
-    const { boardId, content, element_id, x, y } = parsed.data;
+    const { boardId, content, element_id, x, y, clientId } = parsed.data;
     const role = await getBoardRole(userId, boardId).catch(() => null);
     if (!role) {
       return socket.emit(SocketEvents.ERROR, { message: 'You do not have access to this board' });
@@ -136,10 +141,29 @@ export const handleConnection = (io: Server, socket: AuthenticatedSocket) => {
 
     try {
       const comment = await createComment(boardId, userId, content, { element_id, x, y });
-      io.to(roomOf(boardId)).emit(SocketEvents.COMMENT_CREATED, { boardId, comment });
+      io.to(roomOf(boardId)).emit(SocketEvents.COMMENT_CREATED, { boardId, comment, clientId });
     } catch (err) {
       logger.warn({ err, boardId }, 'socket comment:create failed');
       socket.emit(SocketEvents.ERROR, { message: 'Comment could not be saved' });
+    }
+  });
+
+  socket.on(SocketEvents.COMMENT_REMOVED, async (raw: unknown) => {
+    const parsed = commentDeleteSchema.safeParse(raw);
+    if (!parsed.success) return socket.emit(SocketEvents.ERROR, { message: 'Invalid comment:delete payload' });
+
+    const { boardId, id } = parsed.data;
+    const role = await getBoardRole(userId, boardId).catch(() => null);
+    if (!role) {
+      return socket.emit(SocketEvents.ERROR, { message: 'You do not have access to this board' });
+    }
+
+    try {
+      await deleteComment(id, userId, role === 'owner');
+      io.to(roomOf(boardId)).emit(SocketEvents.COMMENT_REMOVED, { boardId, id });
+    } catch (err) {
+      logger.warn({ err, boardId, id }, 'socket comment:delete failed');
+      socket.emit(SocketEvents.ERROR, { message: 'Comment could not be deleted' });
     }
   });
 

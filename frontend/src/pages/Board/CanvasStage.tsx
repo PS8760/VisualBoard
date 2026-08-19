@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Canvas as FabricCanvas,
   FabricObject,
@@ -6,6 +6,7 @@ import {
   Point,
   PencilBrush,
   FabricImage,
+  ActiveSelection,
   type TPointerEventInfo,
   type TPointerEvent,
 } from 'fabric';
@@ -25,9 +26,11 @@ import {
   elementKind,
   removeTmpObjects,
   asVB,
+  snapToGrid,
   type DrawingState,
 } from '../../services/fabric.elements';
 import { uid } from '../../utils';
+import { uploadDocument } from '../../api/document.api';
 import type { AttachmentMeta, BoardElement } from '../../types';
 import { CanvasSkeleton } from '../../components/ui/Skeleton';
 import EmptyBoard from './EmptyBoard';
@@ -37,15 +40,22 @@ export default function CanvasStage() {
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const drawingRef = useRef<DrawingState | null>(null);
   const selectionBoxRef = useRef<FabricObject | null>(null);
+  const selectionOriginRef = useRef<{ x: number; y: number } | null>(null);
   const panningRef = useRef<{ lastX: number; lastY: number } | null>(null);
   const spaceDownRef = useRef(false);
+  const shiftDownRef = useRef(false);
   const objectMapRef = useRef<Map<string, FabricObject>>(new Map());
+  const loadedBoardRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastClickRef = useRef<{ x: number; y: number } | null>(null);
+  const [drawingDims, setDrawingDims] = useState<{ x: number; y: number; label: string } | null>(null);
 
   const board = useBoardStore((s) => s.board);
   const revision = useBoardStore((s) => s.revision);
   const loading = useBoardStore((s) => s.loading);
   const tool = useToolStore((s) => s.tool);
+  const penWidth = useToolStore((s) => s.penWidth);
+  const penColor = useToolStore((s) => s.penColor);
 
   // ----- tool switching ----------------------------------------------------
   useEffect(() => {
@@ -56,23 +66,50 @@ export default function CanvasStage() {
     canvas.isDrawingMode = isPen;
     if (isPen) {
       const brush = new PencilBrush(canvas);
-      brush.width = 2;
-      brush.color = '#1b1a17';
+      brush.width = penWidth;
+      brush.color = penColor;
       canvas.freeDrawingBrush = brush;
       canvas.selection = false;
+      canvas.skipTargetFind = false;
       canvas.defaultCursor = 'crosshair';
       canvas.hoverCursor = 'crosshair';
-    } else {
-      canvas.selection = tool === 'select';
-      canvas.defaultCursor = tool === 'hand' ? 'grab' : 'default';
-      canvas.hoverCursor = 'default';
+    } else if (tool === 'hand') {
+      canvas.selection = false;
+      canvas.skipTargetFind = true;
+      canvas.defaultCursor = 'grab';
+      canvas.hoverCursor = 'grab';
       if (canvas.getActiveObjects().length) {
         canvas.discardActiveObject();
         useBoardStore.getState().clearSelection();
         canvas.requestRenderAll();
       }
+    } else {
+      canvas.selection = tool === 'select';
+      canvas.skipTargetFind = false;
+      const cursorMap: Record<string, string> = {
+        select: 'default',
+        rect: 'crosshair',
+        circle: 'crosshair',
+        triangle: 'crosshair',
+        ellipse: 'crosshair',
+        line: 'crosshair',
+        arrow: 'crosshair',
+        text: 'text',
+        sticky: 'crosshair',
+        image: 'crosshair',
+        document: 'crosshair',
+        comment: 'crosshair',
+      };
+      canvas.defaultCursor = cursorMap[tool] || 'default';
+      canvas.hoverCursor = tool === 'select' ? 'move' : canvas.defaultCursor;
+      // Only discard selection when switching to a non-select tool
+      if (tool !== 'select' && canvas.getActiveObjects().length) {
+        canvas.discardActiveObject();
+        useBoardStore.getState().clearSelection();
+        canvas.requestRenderAll();
+      }
     }
-  }, [tool]);
+  }, [tool, penWidth, penColor]);
 
   const shouldPan = (e: MouseEvent) => tool === 'hand' || spaceDownRef.current || e.button === 1;
 
@@ -104,10 +141,16 @@ export default function CanvasStage() {
 
     const onMouseDown = (opt: TPointerEventInfo<TPointerEvent>) => {
       const e = opt.e as MouseEvent;
+      const pointer = opt.scenePoint ?? opt.viewportPoint;
+
+      // Store last click position for image placement
+      lastClickRef.current = { x: pointer.x, y: pointer.y };
+
       if (shouldPan(e)) {
         panningRef.current = { lastX: e.clientX, lastY: e.clientY };
         canvas.selection = false;
         canvas.defaultCursor = 'grabbing';
+        canvas.hoverCursor = 'grabbing';
         if (canvas.getActiveObject()) {
           canvas.discardActiveObject();
           useBoardStore.getState().clearSelection();
@@ -115,8 +158,6 @@ export default function CanvasStage() {
         canvas.requestRenderAll();
         return;
       }
-
-      const pointer = opt.scenePoint ?? opt.viewportPoint;
 
       if (tool === 'image') {
         fileInputRef.current?.click();
@@ -140,6 +181,7 @@ export default function CanvasStage() {
         };
         useBoardStore.getState().addElement(el);
         toast.info('Drop a file onto the card to attach it');
+        useToolStore.getState().setTool('select');
         return;
       }
 
@@ -147,15 +189,16 @@ export default function CanvasStage() {
       if (tool === 'select') {
         const hit = findObjectAt(canvas, pointer.x, pointer.y);
         if (!hit) {
-          // start selection box
+          selectionOriginRef.current = { x: pointer.x, y: pointer.y };
           const rect = new (Rect as any)({
             left: pointer.x,
             top: pointer.y,
-            width: 1,
-            height: 1,
-            fill: 'rgba(0,0,0,0.08)',
-            stroke: 'rgba(0,0,0,0.12)',
+            width: 0,
+            height: 0,
+            fill: 'rgba(217, 72, 15, 0.08)',
+            stroke: 'rgba(217, 72, 15, 0.45)',
             strokeWidth: 1,
+            strokeDashArray: [4, 4],
             selectable: false,
             evented: false,
             excludeFromExport: true,
@@ -193,6 +236,8 @@ export default function CanvasStage() {
         canvas.setActiveObject(obj);
         canvas.requestRenderAll();
         (canvas as unknown as { enterEditing: (o: unknown) => void }).enterEditing(obj);
+        useBoardStore.getState().addElement(el);
+        useToolStore.getState().setTool('select');
       } else if (drawing.type === 'comment' && drawing.object) {
         const el = endDrawing(canvas, drawing, pointer);
         drawingRef.current = null;
@@ -202,6 +247,7 @@ export default function CanvasStage() {
           useUIStore.getState().setActiveComment({ elementId: el.id, x: el.x, y: el.y });
           useUIStore.getState().setRightPanelTab('comments');
         }
+        useToolStore.getState().setTool('select');
       } else if (drawing.type === 'shape') {
         drawingRef.current = drawing;
       }
@@ -217,33 +263,61 @@ export default function CanvasStage() {
         store.panBy(dx, dy);
         return;
       }
-      if (selectionBoxRef.current) {
+      if (selectionBoxRef.current && selectionOriginRef.current) {
+        const origX = selectionOriginRef.current.x;
+        const origY = selectionOriginRef.current.y;
+        const curX = opt.scenePoint?.x ?? opt.viewportPoint.x;
+        const curY = opt.scenePoint?.y ?? opt.viewportPoint.y;
         const box = selectionBoxRef.current as any;
         box.set({
-          left: Math.min(box.left, opt.scenePoint?.x ?? opt.viewportPoint.x),
-          top: Math.min(box.top, opt.scenePoint?.y ?? opt.viewportPoint.y),
-          width: Math.abs((opt.scenePoint?.x ?? opt.viewportPoint.x) - box.left),
-          height: Math.abs((opt.scenePoint?.y ?? opt.viewportPoint.y) - box.top),
+          left: Math.min(origX, curX),
+          top: Math.min(origY, curY),
+          width: Math.max(1, Math.abs(curX - origX)),
+          height: Math.max(1, Math.abs(curY - origY)),
         });
         canvas.requestRenderAll();
       } else if (drawingRef.current) {
         const pointer = opt.scenePoint ?? opt.viewportPoint;
-        updateDrawing(canvas, drawingRef.current, pointer);
+        const gridVisible = useCanvasStore.getState().gridVisible;
+        const dims = updateDrawing(canvas, drawingRef.current, pointer, {
+          shift: shiftDownRef.current,
+          snapGrid: gridVisible,
+        });
+        // Show dimension tooltip near cursor
+        if (dims.label) {
+          const e = opt.e as MouseEvent;
+          const rect = host.getBoundingClientRect();
+          setDrawingDims({
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top - 30,
+            label: dims.label,
+          });
+        }
+      } else {
+        setDrawingDims(null);
       }
       broadcastCursor(opt);
     };
 
     const onMouseUp = (opt: TPointerEventInfo<TPointerEvent>) => {
+      setDrawingDims(null);
       if (panningRef.current) {
         panningRef.current = null;
         canvas.selection = tool === 'select';
+        canvas.skipTargetFind = tool === 'hand';
         canvas.defaultCursor = tool === 'hand' ? 'grab' : 'default';
+        canvas.hoverCursor = tool === 'hand' ? 'grab' : (tool === 'select' ? 'move' : 'default');
         canvas.requestRenderAll();
         return;
       }
       if (selectionBoxRef.current) {
         const box = selectionBoxRef.current as any;
         const bounds = box.getBoundingRect();
+        canvas.remove(box);
+        selectionBoxRef.current = null;
+        selectionOriginRef.current = null;
+
+        const selectedObjects: FabricObject[] = [];
         const ids: string[] = [];
         for (const obj of canvas.getObjects()) {
           if (!obj.visible || obj.excludeFromExport) continue;
@@ -256,14 +330,22 @@ export default function CanvasStage() {
             b.top + b.height > bounds.top
           ) {
             const id = elementId(obj);
-            if (id) ids.push(id);
+            if (id) {
+              ids.push(id);
+              selectedObjects.push(obj);
+            }
           }
         }
-        canvas.remove(box);
-        selectionBoxRef.current = null;
-        if (ids.length) {
+
+        if (selectedObjects.length > 1) {
+          const activeSel = new ActiveSelection(selectedObjects, { canvas });
+          canvas.setActiveObject(activeSel);
+          useBoardStore.getState().select(ids);
+        } else if (selectedObjects.length === 1) {
+          canvas.setActiveObject(selectedObjects[0]);
           useBoardStore.getState().select(ids);
         } else {
+          canvas.discardActiveObject();
           useBoardStore.getState().select([]);
         }
         canvas.requestRenderAll();
@@ -272,11 +354,24 @@ export default function CanvasStage() {
 
       if (drawingRef.current) {
         const pointer = opt.scenePoint ?? opt.viewportPoint;
-        const el = endDrawing(canvas, drawingRef.current, pointer);
+        const gridVisible = useCanvasStore.getState().gridVisible;
+        const el = endDrawing(canvas, drawingRef.current, pointer, {
+          shift: shiftDownRef.current,
+          snapGrid: gridVisible,
+        });
         drawingRef.current = null;
         if (el) {
+          // endDrawing already removed temp object, now materialize the final element
+          const finalObj = materializeElement(el);
+          canvas.add(finalObj);
+          objectMapRef.current.set(el.id, finalObj);
+          canvas.setActiveObject(finalObj);
+          canvas.requestRenderAll();
+
           useBoardStore.getState().addElement(el);
           useBoardStore.getState().select([el.id]);
+          // Auto-switch back to select tool after drawing
+          useToolStore.getState().setTool('select');
         }
       }
     };
@@ -287,6 +382,9 @@ export default function CanvasStage() {
       if (el) {
         el.id = uid('el');
         el.kind = 'pen';
+        // Preserve the pen settings
+        el.stroke = useToolStore.getState().penColor;
+        el.strokeWidth = useToolStore.getState().penWidth;
         const obj = materializeElement(el);
         canvas.remove(opt.path);
         canvas.add(obj);
@@ -316,10 +414,46 @@ export default function CanvasStage() {
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceDownRef.current = false;
+      if (e.code === 'Space') {
+        spaceDownRef.current = false;
+        canvas.defaultCursor = tool === 'hand' ? 'grab' : 'default';
+        canvas.hoverCursor = tool === 'hand' ? 'grab' : (tool === 'select' ? 'move' : 'default');
+        canvas.requestRenderAll();
+      }
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftDownRef.current = false;
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceDownRef.current = true;
+      if (e.code === 'Space' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement)?.isContentEditable)) {
+        spaceDownRef.current = true;
+        canvas.defaultCursor = 'grab';
+        canvas.hoverCursor = 'grab';
+        canvas.requestRenderAll();
+      }
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftDownRef.current = true;
+    };
+
+    const onDoubleClick = (opt: TPointerEventInfo<TPointerEvent>) => {
+      const target = opt.target;
+      if (!target) return;
+
+      // Double-click on IText to edit
+      if (target instanceof IText) {
+        canvas.setActiveObject(target);
+        (canvas as unknown as { enterEditing: (o: unknown) => void }).enterEditing(target);
+        return;
+      }
+
+      // Double-click on sticky Group to edit the text child
+      if (target instanceof Group) {
+        const textObj = target.getObjects().find((o) => o instanceof IText) as IText | undefined;
+        if (textObj) {
+          canvas.setActiveObject(target);
+          canvas.requestRenderAll();
+          // Enable text editing by making it temporarily selectable
+          textObj.set({ selectable: true, evented: true, editable: true });
+          (canvas as unknown as { enterEditing: (o: unknown) => void }).enterEditing(textObj);
+        }
+      }
     };
 
     const onDrop = (e: DragEvent) => {
@@ -375,6 +509,7 @@ export default function CanvasStage() {
     canvas.on('mouse:down', onMouseDown);
     canvas.on('mouse:move', onMouseMove);
     canvas.on('mouse:up', onMouseUp);
+    canvas.on('mouse:dblclick', onDoubleClick);
     canvas.on('path:created', onPathCreated);
     canvas.on('selection:created', onSelection);
     canvas.on('selection:updated', onSelection);
@@ -398,6 +533,7 @@ export default function CanvasStage() {
       canvas.off('mouse:down', onMouseDown);
       canvas.off('mouse:move', onMouseMove);
       canvas.off('mouse:up', onMouseUp);
+      canvas.off('mouse:dblclick', onDoubleClick);
       canvas.off('path:created', onPathCreated);
       canvas.off('selection:created', onSelection);
       canvas.off('selection:updated', onSelection);
@@ -425,6 +561,9 @@ export default function CanvasStage() {
       width: host.clientWidth,
       height: host.clientHeight,
     });
+
+    // Store lastClickRef on canvas for image placement
+    (canvas as any)._lastClickRef = lastClickRef;
 
     canvas.setViewportTransform([1, 0, 0, 1, host.clientWidth / 2, host.clientHeight / 2]);
 
@@ -470,7 +609,9 @@ export default function CanvasStage() {
     });
 
     canvas.requestRenderAll();
-    fitBoardToView(canvas);
+    const shouldFit = loadedBoardRef.current !== board.id;
+    loadedBoardRef.current = board.id;
+    if (shouldFit) fitBoardToView(canvas);
     useCanvasStore.getState().setReady(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board?.id, revision]);
@@ -490,6 +631,17 @@ export default function CanvasStage() {
         <div className="grid-paper absolute inset-0" style={gridStyle} aria-hidden="true" />
       )}
       <div ref={canvasHostRef} className="absolute inset-0 z-10" />
+
+      {/* Drawing dimension tooltip */}
+      {drawingDims && (
+        <div
+          className="pointer-events-none absolute z-20 rounded-md bg-ink px-2 py-1 font-mono text-[11px] font-medium text-paper shadow-lg"
+          style={{ left: drawingDims.x, top: drawingDims.y }}
+        >
+          {drawingDims.label}
+        </div>
+      )}
+
       <input
         ref={fileInputRef}
         type="file"
@@ -520,11 +672,16 @@ async function onImagePicked(e: React.ChangeEvent<HTMLInputElement>) {
     const maxW = Math.min(320, (container?.clientWidth ?? 600) * 0.4);
     const scale = Math.min(1, maxW / img.width);
 
+    // Use last click position if available, otherwise center
+    const lastClick = (canvas as any)._lastClickRef?.current;
+    const x = lastClick?.x ?? (container?.clientWidth ?? 0) / 2;
+    const y = lastClick?.y ?? (container?.clientHeight ?? 0) / 2;
+
     const el: BoardElement = {
       id: uid('el'),
       kind: 'image',
-      x: (container?.clientWidth ?? 0) / 2 - (img.width * scale) / 2,
-      y: (container?.clientHeight ?? 0) / 2 - (img.height * scale) / 2,
+      x: x - (img.width * scale) / 2,
+      y: y - (img.height * scale) / 2,
       width: img.width * scale,
       height: img.height * scale,
       rotation: 0,
@@ -544,6 +701,7 @@ async function onImagePicked(e: React.ChangeEvent<HTMLInputElement>) {
     asVB(img).data = { id: el.id, kind: 'image' };
     canvas.add(img);
     useBoardStore.getState().addElement(el);
+    useToolStore.getState().setTool('select');
     toast.success(`${file.name} added to the board`);
   } catch {
     toast.error('Could not load that image');

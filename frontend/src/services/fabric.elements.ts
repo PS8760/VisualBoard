@@ -93,6 +93,7 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
     left: el.x,
     top: el.y,
     angle: el.rotation,
+    opacity: el.opacity ?? 1,
     selectable: opts.selectable ?? true,
     evented: opts.evented ?? true,
     data: { id: el.id, kind: el.kind, attachment: el.attachment, commentCount: el.commentCount },
@@ -139,12 +140,13 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
         fill: '#4a3f16',
         selectable: false,
         evented: false,
+        editable: false,
       });
       const group = new Group([bg, text], {
         ...shared,
         left: el.x,
         top: el.y,
-        subTargetCheck: false,
+        subTargetCheck: true,
       });
       asVB(group).data = shared.data;
       return group;
@@ -311,11 +313,30 @@ export function serializeElement(obj: FabricObject): BoardElement | null {
   return common;
 }
 
+export const GRID_SIZE = 20;
+
+/** Snaps a value to the nearest grid increment. */
+export function snapToGrid(v: number, grid = GRID_SIZE): number {
+  return Math.round(v / grid) * grid;
+}
+
+/** Snaps a point to the nearest grid position. */
+export function snapPointToGrid(p: { x: number; y: number }, grid = GRID_SIZE) {
+  return { x: snapToGrid(p.x, grid), y: snapToGrid(p.y, grid) };
+}
+
 export interface DrawingState {
   object: FabricObject | null;
   kind: ElementKind;
   origin: { x: number; y: number };
   type: 'shape' | 'text' | 'comment';
+}
+
+/** Dimension info emitted during live drawing for the HUD overlay. */
+export interface DrawingDimensions {
+  w: number;
+  h: number;
+  label: string;
 }
 
 /** Creates a placeholder object for a shape/line/arrow draw gesture. */
@@ -337,6 +358,9 @@ export function startDrawing(canvas: Canvas, kind: ElementKind, point: { x: numb
       break;
     case 'circle':
       object = new Circle({ ...common, radius: 1, fill: CANVAS_COLORS.nodeFill, stroke: CANVAS_COLORS.nodeStroke, strokeWidth: 1.5 });
+      break;
+    case 'sticky':
+      object = new Rect({ ...common, width: 140, height: 140, rx: 6, ry: 6, fill: CANVAS_COLORS.stickyFill, stroke: CANVAS_COLORS.stickyStroke, strokeWidth: 1 });
       break;
     case 'line':
       object = new Line([point.x, point.y, point.x, point.y], { ...common, left: 0, top: 0, stroke: CANVAS_COLORS.lineStroke, strokeWidth: 1.75 });
@@ -368,35 +392,105 @@ export function startDrawing(canvas: Canvas, kind: ElementKind, point: { x: numb
   return { object, kind, origin: point, type };
 }
 
-export function updateDrawing(canvas: Canvas, state: DrawingState, point: { x: number; y: number }) {
+export function updateDrawing(
+  canvas: Canvas,
+  state: DrawingState,
+  point: { x: number; y: number },
+  modifiers: { shift?: boolean; snapGrid?: boolean } = {},
+): DrawingDimensions {
   const obj = state.object;
-  if (!obj) return;
+  const dims: DrawingDimensions = { w: 0, h: 0, label: '' };
+  if (!obj) return dims;
 
-  if (state.kind === 'rect') {
-    const w = point.x - state.origin.x;
-    const h = point.y - state.origin.y;
-    obj.set({
-      left: Math.min(state.origin.x, point.x),
-      top: Math.min(state.origin.y, point.y),
-      width: Math.abs(w),
-      height: Math.abs(h),
-    });
-  } else if (state.kind === 'circle') {
-    const r = Math.max(Math.hypot(point.x - state.origin.x, point.y - state.origin.y), 1);
-    obj.set({ radius: r, left: state.origin.x - r, top: state.origin.y - r });
-  } else if (state.kind === 'line' || state.kind === 'arrow') {
-    (obj as Line).set({ x1: state.origin.x, y1: state.origin.y, x2: point.x, y2: point.y });
+  const { shift = false, snapGrid = false } = modifiers;
+
+  let p = { ...point };
+  if (snapGrid) {
+    p = snapPointToGrid(p);
   }
+
+  if (state.kind === 'rect' || state.kind === 'sticky') {
+    let w = p.x - state.origin.x;
+    let h = p.y - state.origin.y;
+    if (shift) {
+      // Constrain to perfect square using the larger axis
+      const side = Math.max(Math.abs(w), Math.abs(h));
+      w = side * Math.sign(w || 1);
+      h = side * Math.sign(h || 1);
+    }
+    const left = w >= 0 ? state.origin.x : state.origin.x + w;
+    const top = h >= 0 ? state.origin.y : state.origin.y + h;
+    obj.set({ left, top, width: Math.max(1, Math.abs(w)), height: Math.max(1, Math.abs(h)) });
+    dims.w = Math.abs(w);
+    dims.h = Math.abs(h);
+    dims.label = `${Math.round(dims.w)} × ${Math.round(dims.h)}`;
+  } else if (state.kind === 'circle') {
+    let dx = p.x - state.origin.x;
+    let dy = p.y - state.origin.y;
+    if (shift) {
+      // Constrain to a circle drawn from top-left corner (bounding-box style)
+      const side = Math.max(Math.abs(dx), Math.abs(dy));
+      dx = side * Math.sign(dx || 1);
+      dy = side * Math.sign(dy || 1);
+      // Place from top-left corner so it behaves like a rect constraint
+      const r = Math.max(side / 2, 1);
+      const cx = state.origin.x + dx / 2;
+      const cy = state.origin.y + dy / 2;
+      obj.set({ radius: r, left: cx - r, top: cy - r });
+      dims.w = r * 2;
+      dims.h = r * 2;
+      dims.label = `r ${Math.round(r)}`;
+    } else {
+      const r = Math.max(Math.hypot(dx, dy), 1);
+      obj.set({ radius: r, left: state.origin.x - r, top: state.origin.y - r });
+      dims.w = r * 2;
+      dims.h = r * 2;
+      dims.label = `r ${Math.round(r)}`;
+    }
+  } else if (state.kind === 'line' || state.kind === 'arrow') {
+    let ex = p.x;
+    let ey = p.y;
+    if (shift) {
+      // Snap to 45° increments
+      const dx = p.x - state.origin.x;
+      const dy = p.y - state.origin.y;
+      const angle = Math.atan2(dy, dx);
+      const snapped = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+      const len = Math.hypot(dx, dy);
+      ex = state.origin.x + Math.cos(snapped) * len;
+      ey = state.origin.y + Math.sin(snapped) * len;
+    }
+    (obj as Line).set({ x1: state.origin.x, y1: state.origin.y, x2: ex, y2: ey });
+    const len = Math.round(Math.hypot(ex - state.origin.x, ey - state.origin.y));
+    dims.w = len;
+    dims.h = 0;
+    dims.label = `${len}px`;
+  }
+
   canvas.requestRenderAll();
+  return dims;
 }
 
-export function endDrawing(canvas: Canvas, state: DrawingState, point: { x: number; y: number }): BoardElement | null {
+export function endDrawing(
+  canvas: Canvas,
+  state: DrawingState,
+  point: { x: number; y: number },
+  modifiers: { shift?: boolean; snapGrid?: boolean } = {},
+): BoardElement | null {
   const obj = state.object;
   if (!obj) return null;
-  updateDrawing(canvas, state, point);
+  updateDrawing(canvas, state, point, modifiers);
   canvas.remove(obj);
 
-  const size = obj.width ?? 0;
+  const size =
+    state.kind === 'circle'
+      ? ((obj as Circle).radius ?? 0) * 2
+      : state.kind === 'line' || state.kind === 'arrow'
+        ? Math.hypot(
+          ((obj as Line).x2 ?? 0) - ((obj as Line).x1 ?? 0),
+          ((obj as Line).y2 ?? 0) - ((obj as Line).y1 ?? 0),
+        )
+        : (obj.width ?? 0);
   if (state.type === 'shape' && size < 3) {
     return null;
   }
@@ -404,15 +498,23 @@ export function endDrawing(canvas: Canvas, state: DrawingState, point: { x: numb
   const el = serializeElement(obj);
   if (!el) return null;
   el.id = uid(state.kind === 'comment' ? 'cm' : 'el');
+
   // Ensure preview styling (semi-transparent) does not persist into final element
   if (state.kind === 'rect' || state.kind === 'sticky') {
     el.fill = el.fill ?? CANVAS_COLORS.nodeFill;
     el.stroke = el.stroke ?? CANVAS_COLORS.nodeStroke;
   }
+
+  // For sticky notes, ensure proper fill color and add default text
+  if (state.kind === 'sticky') {
+    el.fill = CANVAS_COLORS.stickyFill;
+    el.stroke = CANVAS_COLORS.stickyStroke;
+    el.content = 'Write a note…';
+    el.fontSize = 13;
+  }
+
   el.kind = state.kind;
-  obj.set({ selectable: true, evented: true });
-  asVB(obj).data = { ...asVB(obj).data, id: el.id, kind: el.kind };
-  canvas.add(obj);
+  // Don't add the temp object back - caller will materialize the BoardElement
   return el;
 }
 

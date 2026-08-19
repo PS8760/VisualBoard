@@ -70,6 +70,7 @@ export interface BoardElement {
   pointsToPath?: string;
   attachment?: AttachmentMeta | null;
   commentCount?: number;
+  opacity?: number;
   version: number;
 }
 

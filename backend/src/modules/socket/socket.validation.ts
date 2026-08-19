@@ -33,6 +33,12 @@ export const commentCreateSchema = z.object({
   element_id: z.string().min(1).max(64).nullish(),
   x: z.number().finite().nullish(),
   y: z.number().finite().nullish(),
+  clientId: z.string().min(1).max(64).nullish(),
+});
+
+export const commentDeleteSchema = z.object({
+  boardId: z.coerce.number().int().positive(),
+  id: z.coerce.number().int().positive(),
 });
 
 export default {
@@ -42,4 +48,5 @@ export default {
   elementUpdateSchema,
   elementDeleteSchema,
   commentCreateSchema,
+  commentDeleteSchema,
 };

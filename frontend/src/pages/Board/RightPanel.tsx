@@ -4,13 +4,15 @@ import {
   Info, MessageSquare, FileText, Sparkles, X, GitBranch, Check, Loader2, AlertTriangle, Wand2,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import type { Canvas } from 'fabric';
 import { cn, formatFileSize, timeAgo } from '../../utils';
 import { useBoardStore } from '../../stores/useBoardStore';
+import { useCanvasStore } from '../../stores/useCanvasStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useSuggestionStore } from '../../stores/useSuggestionStore';
 import { fetchBoardSuggestions, type AiSuggestion } from '../../api/suggestions.api';
 import { SUGGESTION_META } from '../../utils/shortcuts';
-import type { PanelTab } from '../../types';
+import type { PanelTab, BoardElement } from '../../types';
 
 const TABS: Array<{ id: PanelTab; label: string; icon: typeof Info }> = [
   { id: 'info', label: 'Info', icon: Info },
@@ -77,15 +79,19 @@ export default function RightPanel() {
 function BoardInfo() {
   const board = useBoardStore((s) => s.board);
   const selectedIds = useBoardStore((s) => s.selectedIds);
+  const canvas = useCanvasStore((s) => s.canvas);
 
   const stats = board
     ? [
-        ['Elements', board.elements.length],
-        ['Connections', board.elements.filter((e) => e.kind === 'line' || e.kind === 'arrow').length],
-        ['Attachments', board.elements.filter((e) => e.attachment).length],
-        ['Members', (board.members?.length ?? 0) + 1],
-      ]
+      ['Elements', board.elements.length],
+      ['Connections', board.elements.filter((e) => e.kind === 'line' || e.kind === 'arrow').length],
+      ['Attachments', board.elements.filter((e) => e.attachment).length],
+      ['Members', (board.members?.length ?? 0) + 1],
+    ]
     : [];
+
+  // Get selected elements for property editing
+  const selectedElements = board?.elements.filter((e) => selectedIds.includes(e.id)) ?? [];
 
   return (
     <div className="space-y-5">
@@ -108,6 +114,10 @@ function BoardInfo() {
         )}
       </div>
 
+      {selectedIds.length > 0 && selectedElements.length > 0 && (
+        <ShapeInspector elements={selectedElements} canvas={canvas} />
+      )}
+
       <div>
         <p className="mono-label mb-2 text-ink-3">Selection</p>
         {selectedIds.length ? (
@@ -126,6 +136,154 @@ function BoardInfo() {
           <p className="text-[12px] leading-relaxed text-ink-3">
             Select an element on the canvas to inspect or delete it. Drag files onto an element to attach them.
           </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface ShapeInspectorProps {
+  elements: BoardElement[];
+  canvas: Canvas | null;
+}
+
+function ShapeInspector({ elements, canvas }: ShapeInspectorProps) {
+  const updateElement = useBoardStore((s) => s.updateElement);
+
+  // Find common properties across selected elements
+  const firstEl = elements[0];
+  const allSameKind = elements.every((e) => e.kind === firstEl.kind);
+  const canEditFill = elements.every((e) => ['rect', 'circle', 'sticky', 'document'].includes(e.kind));
+  const canEditStroke = elements.every((e) => ['rect', 'circle', 'line', 'arrow', 'pen'].includes(e.kind));
+  const canEditStrokeWidth = canEditStroke;
+  const canEditFontSize = elements.every((e) => ['text', 'sticky', 'document'].includes(e.kind));
+  const canEditOpacity = true;
+
+  const commonFill = canEditFill && elements.every((e) => e.fill === firstEl.fill) ? firstEl.fill : '';
+  const commonStroke = canEditStroke && elements.every((e) => e.stroke === firstEl.stroke) ? firstEl.stroke : '';
+  const commonStrokeWidth = canEditStrokeWidth && elements.every((e) => e.strokeWidth === firstEl.strokeWidth) ? firstEl.strokeWidth : 1.5;
+  const commonFontSize = canEditFontSize && elements.every((e) => e.fontSize === firstEl.fontSize) ? firstEl.fontSize : 14;
+
+  const handlePropertyChange = (property: keyof BoardElement, value: any) => {
+    elements.forEach((el) => {
+      updateElement(el.id, { [property]: value });
+      // Update fabric object immediately for visual feedback
+      if (canvas) {
+        const obj = canvas.getObjects().find((o) => (o as any).data?.id === el.id);
+        if (obj) {
+          if (property === 'fill' && 'fill' in obj) obj.set({ fill: value });
+          if (property === 'stroke' && 'stroke' in obj) obj.set({ stroke: value });
+          if (property === 'strokeWidth' && 'strokeWidth' in obj) obj.set({ strokeWidth: value });
+          if (property === 'fontSize' && 'fontSize' in obj) obj.set({ fontSize: value });
+          if (property === 'opacity') obj.set({ opacity: value });
+        }
+      }
+    });
+    canvas?.requestRenderAll();
+  };
+
+  return (
+    <div className="rounded-md border border-line-2 bg-paper p-3">
+      <p className="mono-label mb-3 text-ink-3">Properties</p>
+      <div className="space-y-3">
+        {canEditFill && (
+          <div>
+            <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-wide text-ink-3">
+              Fill
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={commonFill || '#fafaf8'}
+                onChange={(e) => handlePropertyChange('fill', e.target.value)}
+                className="h-8 w-12 cursor-pointer rounded-sm border border-line-2"
+              />
+              <input
+                type="text"
+                value={commonFill || '#fafaf8'}
+                onChange={(e) => handlePropertyChange('fill', e.target.value)}
+                className="h-8 flex-1 rounded-sm border border-line-2 bg-paper px-2 font-mono text-[11px] text-ink focus:border-ink focus:outline-none"
+                placeholder="Mixed"
+              />
+            </div>
+          </div>
+        )}
+
+        {canEditStroke && (
+          <div>
+            <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-wide text-ink-3">
+              Stroke
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={commonStroke || '#c2c0b5'}
+                onChange={(e) => handlePropertyChange('stroke', e.target.value)}
+                className="h-8 w-12 cursor-pointer rounded-sm border border-line-2"
+              />
+              <input
+                type="text"
+                value={commonStroke || '#c2c0b5'}
+                onChange={(e) => handlePropertyChange('stroke', e.target.value)}
+                className="h-8 flex-1 rounded-sm border border-line-2 bg-paper px-2 font-mono text-[11px] text-ink focus:border-ink focus:outline-none"
+                placeholder="Mixed"
+              />
+            </div>
+          </div>
+        )}
+
+        {canEditStrokeWidth && (
+          <div>
+            <label className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-wide text-ink-3">
+              <span>Stroke Width</span>
+              <span className="text-ink-2">{commonStrokeWidth}px</span>
+            </label>
+            <input
+              type="range"
+              min="0.5"
+              max="10"
+              step="0.5"
+              value={commonStrokeWidth}
+              onChange={(e) => handlePropertyChange('strokeWidth', parseFloat(e.target.value))}
+              className="h-2 w-full cursor-pointer appearance-none rounded-full bg-paper-2 outline-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-ink"
+            />
+          </div>
+        )}
+
+        {canEditFontSize && (
+          <div>
+            <label className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-wide text-ink-3">
+              <span>Font Size</span>
+              <span className="text-ink-2">{commonFontSize}px</span>
+            </label>
+            <input
+              type="range"
+              min="8"
+              max="48"
+              step="1"
+              value={commonFontSize}
+              onChange={(e) => handlePropertyChange('fontSize', parseInt(e.target.value))}
+              className="h-2 w-full cursor-pointer appearance-none rounded-full bg-paper-2 outline-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-ink"
+            />
+          </div>
+        )}
+
+        {canEditOpacity && (
+          <div>
+            <label className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-wide text-ink-3">
+              <span>Opacity</span>
+              <span className="text-ink-2">{Math.round((firstEl.opacity ?? 1) * 100)}%</span>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={firstEl.opacity ?? 1}
+              onChange={(e) => handlePropertyChange('opacity', parseFloat(e.target.value))}
+              className="h-2 w-full cursor-pointer appearance-none rounded-full bg-paper-2 outline-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-ink"
+            />
+          </div>
         )}
       </div>
     </div>

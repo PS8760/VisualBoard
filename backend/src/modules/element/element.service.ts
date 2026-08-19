@@ -2,8 +2,11 @@ import prisma from '../../config/prisma.js';
 import { notFoundError } from '../../utils/errors.js';
 
 export const createElement = async (boardId: number, elementData: Record<string, unknown>, id: string) => {
-  return prisma.elements.create({
-    data: { id, board_id: boardId, element_data: elementData as object },
+  const payload = { ...elementData, id } as object;
+  return prisma.elements.upsert({
+    where: { id },
+    create: { id, board_id: boardId, element_data: payload },
+    update: { element_data: payload },
   });
 };
 
@@ -15,9 +18,9 @@ export const getElementById = async (id: string) => {
   return prisma.elements.findUnique({ where: { id } });
 };
 
-export const updateElement = async (id: string, patch: Record<string, unknown>) => {
+export const updateElement = async (boardId: number, id: string, patch: Record<string, unknown>) => {
   const existing = await prisma.elements.findUnique({ where: { id } });
-  if (!existing) throw notFoundError('Element not found');
+  if (!existing || existing.board_id !== boardId) throw notFoundError('Element not found');
 
   const current = existing.element_data as Record<string, unknown>;
   const merged = {
@@ -29,13 +32,19 @@ export const updateElement = async (id: string, patch: Record<string, unknown>) 
   return prisma.elements.update({ where: { id }, data: { element_data: merged as object } });
 };
 
-export const replaceElementData = async (id: string, elementData: Record<string, unknown>) => {
-  return prisma.elements.update({ where: { id }, data: { element_data: elementData as object } });
+export const replaceElementData = async (boardId: number, id: string, elementData: Record<string, unknown>) => {
+  const existing = await prisma.elements.findUnique({ where: { id } });
+  if (!existing || existing.board_id !== boardId) throw notFoundError('Element not found');
+
+  return prisma.elements.update({
+    where: { id },
+    data: { element_data: { ...elementData, id } as object },
+  });
 };
 
-export const deleteElement = async (id: string) => {
+export const deleteElement = async (boardId: number, id: string) => {
   const existing = await prisma.elements.findUnique({ where: { id } });
-  if (!existing) throw notFoundError('Element not found');
+  if (!existing || existing.board_id !== boardId) throw notFoundError('Element not found');
 
   const docs = await prisma.documents.findMany({ where: { element_id: id } });
   await prisma.elements.delete({ where: { id } });

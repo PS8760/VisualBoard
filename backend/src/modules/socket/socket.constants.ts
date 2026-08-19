@@ -15,6 +15,7 @@ export const SocketEvents = {
   ELEMENT_REMOVED: 'element:removed',
 
   COMMENT_CREATED: 'comment:created',
+  COMMENT_REMOVED: 'comment:removed',
 
   ERROR: 'error',
 } as const;

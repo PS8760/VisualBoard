@@ -1,18 +1,47 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, History as HistoryIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { useUIStore } from '../../stores/useUIStore';
-import { useBoardStore, useVersions } from '../../stores/useBoardStore';
+import { useBoardStore } from '../../stores/useBoardStore';
+import { fetchVersions, restoreVersion } from '../../api/version.api';
 import { timeAgo } from '../../utils';
 import { cn } from '../../utils';
+import type { BoardVersion } from '../../types';
 
 export default function VersionTimeline() {
   const open = useUIStore((s) => s.versionTimelineOpen);
   const setOpen = useUIStore((s) => s.setVersionTimeline);
-  const versions = useVersions();
   const board = useBoardStore((s) => s.board);
-  const [active, setActive] = useState<number>(versions.length - 1);
+  const load = useBoardStore((s) => s.load);
+  const [versions, setVersions] = useState<BoardVersion[]>([]);
+  const [active, setActive] = useState<number>(0);
+  const [restoring, setRestoring] = useState(false);
+
+  useEffect(() => {
+    if (open && board?.id) {
+      fetchVersions(board.id).then((v) => {
+        setVersions(v);
+        setActive(v.length - 1); // Select most recent
+      });
+    }
+  }, [open, board?.id]);
+
+  const handleRestore = async () => {
+    if (!versions[active] || !board?.id || restoring) return;
+    
+    setRestoring(true);
+    const result = await restoreVersion(versions[active]!.id);
+    
+    if (result.ok) {
+      toast.success(`Restored to ${versions[active]?.label ?? 'this version'}`);
+      await load(board.id); // Reload board to show restored state
+      setOpen(false);
+    } else {
+      toast.error('Restore failed', { description: result.message });
+    }
+    setRestoring(false);
+  };
 
   return (
     <AnimatePresence>
@@ -85,14 +114,11 @@ export default function VersionTimeline() {
                 autosaved every change · {versions.length} snapshots
               </p>
               <button
-                disabled={active === versions.length - 1}
-                onClick={() => {
-                  toast.success(`Restored to ${versions[active]?.label ?? 'this version'}`);
-                  setOpen(false);
-                }}
+                disabled={active === versions.length - 1 || restoring}
+                onClick={handleRestore}
                 className="h-6 rounded-sm bg-ink px-2.5 text-[10.5px] font-medium text-paper transition-colors hover:bg-black disabled:pointer-events-none disabled:opacity-40"
               >
-                Restore
+                {restoring ? 'Restoring...' : 'Restore'}
               </button>
             </div>
           </div>

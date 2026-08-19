@@ -45,6 +45,45 @@
   --radius-xl: 16px;
 }
 
+/* ─── Dark theme ──────────────────────────────────────────────────────────── */
+/* Applied when <html class="dark"> is set by useThemeStore */
+.dark {
+  --color-paper: #171614;
+  --color-paper-2: #1e1d1a;
+  --color-paper-3: #282621;
+  --color-ink: #f3f1eb;
+  --color-ink-2: #c7c4bb;
+  --color-ink-3: #918e84;
+  --color-line: #35332e;
+  --color-line-2: #45423b;
+  --color-line-3: #57534a;
+
+  /* Vermilion stays; slightly brighter for dark backgrounds */
+  --color-accent: #e85d2a;
+  --color-accent-2: #f06a35;
+  --color-accent-soft: #3a2118;
+  --color-accent-softer: #2b1d17;
+
+  --color-success: #2e9e5b;
+  --color-success-soft: #14281e;
+  --color-warning: #c48a1a;
+  --color-warning-soft: #281f08;
+  --color-danger: #d9534f;
+  --color-danger-soft: #2a1212;
+
+  /* Dark canvas — warm near-black */
+  --color-board: #1b1a17;
+  /* Warm amber sticky notes in dark */
+  --color-sticky: #5a4820;
+  --color-sticky-2: #6a5426;
+
+  /* Softer shadows — borders do more work in dark */
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.25);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.2), 0 2px 6px rgb(0 0 0 / 0.2);
+  --shadow-md: 0 2px 6px rgb(0 0 0 / 0.22), 0 10px 24px -8px rgb(0 0 0 / 0.36);
+  --shadow-lg: 0 4px 12px rgb(0 0 0 / 0.28), 0 20px 44px -12px rgb(0 0 0 / 0.48);
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;
@@ -57,6 +96,11 @@
     color: var(--color-ink);
     font-family: var(--font-sans);
     font-feature-settings: "cv11", "ss01";
+    /* Smooth theme transitions on key surfaces only — not canvas */
+    transition:
+      background-color 0.22s ease,
+      color 0.22s ease,
+      border-color 0.22s ease;
   }
 
   ::selection {
@@ -74,7 +118,7 @@
     cursor: pointer;
   }
 
-  /* Custom scrollbar */
+  /* Custom scrollbar — adapts via CSS variables */
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--color-line-2) transparent;
@@ -90,6 +134,18 @@
   *::-webkit-scrollbar-track {
     background: transparent;
   }
+
+  /* Smooth header / panel transitions on theme change */
+  header,
+  footer,
+  aside,
+  nav,
+  .transition-theme {
+    transition:
+      background-color 0.22s ease,
+      border-color 0.22s ease,
+      color 0.22s ease;
+  }
 }
 
 @utility grid-paper {
@@ -100,6 +156,13 @@
   background-size: 24px 24px;
 }
 
+/* Dark-mode grid — warmer, slightly more visible lines */
+.dark .grid-paper {
+  background-image:
+    linear-gradient(to right, rgb(243 241 235 / 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(243 241 235 / 0.04) 1px, transparent 1px);
+}
+
 @utility grid-paper-fine {
   background-image:
     linear-gradient(to right, rgb(27 26 23 / 0.04) 1px, transparent 1px),
@@ -107,9 +170,19 @@
   background-size: 12px 12px;
 }
 
+.dark .grid-paper-fine {
+  background-image:
+    linear-gradient(to right, rgb(243 241 235 / 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(243 241 235 / 0.03) 1px, transparent 1px);
+}
+
 @utility dotted-paper {
   background-image: radial-gradient(rgb(27 26 23 / 0.08) 1px, transparent 1px);
   background-size: 22px 22px;
+}
+
+.dark .dotted-paper {
+  background-image: radial-gradient(rgb(243 241 235 / 0.06) 1px, transparent 1px);
 }
 
 @utility mono-label {
@@ -148,4 +221,23 @@
     opacity: 1;
     transform: none !important;
   }
+}
+
+/* ─── Theme toggle animation ─────────────────────────────────────────────── */
+.theme-toggle-icon {
+  transition:
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 0.25s ease;
+}
+.theme-toggle-icon-enter {
+  transform: rotate(-90deg) scale(0.7);
+  opacity: 0;
+}
+.theme-toggle-icon-enter-active {
+  transform: rotate(0deg) scale(1);
+  opacity: 1;
+}
+.theme-toggle-icon-exit {
+  transform: rotate(90deg) scale(0.7);
+  opacity: 0;
 }

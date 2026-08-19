@@ -41,9 +41,9 @@ export async function createVersion(boardId: string): Promise<BoardVersion | nul
   }
 }
 
-export async function restoreVersion(boardId: string, versionId: string) {
+export async function restoreVersion(versionId: string) {
   try {
-    await client.post(`/boards/${boardId}/versions/${versionId}/restore`);
+    await client.post(`/versions/${versionId}/restore`);
     return { ok: true as const };
   } catch (error) {
     return { ok: false as const, message: apiErrorMessage(error) };

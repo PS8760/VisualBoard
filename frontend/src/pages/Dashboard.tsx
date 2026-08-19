@@ -6,6 +6,7 @@ import {
 import { toast } from 'sonner';
 import { LogoMark } from '../components/ui/Logo';
 import { Button } from '../components/ui/Button';
+import { ThemeToggle } from '../components/ui/ThemeToggle';
 import { useAuthStore } from '../stores/useAuthStore';
 import * as boardApi from '../api/board.api';
 import { timeAgo, cn } from '../utils';
@@ -90,6 +91,7 @@ export default function Dashboard() {
         </div>
 
         <div className="relative flex items-center gap-2">
+          <ThemeToggle size="sm" />
           {user && (
             <button
               onClick={() => setMenuOpen((v) => !v)}

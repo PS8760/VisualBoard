@@ -33,11 +33,11 @@ export default function CursorsOverlay() {
         return (
           <motion.div
             key={u.id}
-            className="absolute"
+            className="absolute pointer-events-none"
             initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.15 }}
-            style={{ left: pos.x, top: pos.y }}
+            animate={{ opacity: 1, scale: 1, x: pos.x, y: pos.y }}
+            transition={{ duration: 0.15, x: { duration: 0.08 }, y: { duration: 0.08 } }}
+            style={{ left: 0, top: 0 }}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
               <path

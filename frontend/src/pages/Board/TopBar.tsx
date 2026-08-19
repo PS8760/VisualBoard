@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import {
-  Share2, History, Settings, Command, Check, CloudOff, Loader2, Globe,
+  Share2, History, Settings, Command, Check, CloudOff, Loader2, Globe, AlertCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
 import { LogoMark } from '../../components/ui/Logo';
 import { Tooltip } from '../../components/ui/Tooltip';
+import { ThemeToggle } from '../../components/ui/ThemeToggle';
 import { cn } from '../../utils';
 import { useBoardStore } from '../../stores/useBoardStore';
 import { useUIStore } from '../../stores/useUIStore';
@@ -36,6 +37,11 @@ function SaveIndicator() {
         <>
           <CloudOff size={11} className="text-warning" />
           <span className="text-warning">{saveStatus.message ?? 'offline'}</span>
+        </>
+      ) : saveStatus.state === 'error' ? (
+        <>
+          <AlertCircle size={11} className="text-warning" />
+          <span className="text-warning">{saveStatus.message ?? 'save failed'}</span>
         </>
       ) : (
         <>
@@ -129,6 +135,8 @@ export default function TopBar({ onOpenSettings }: { onOpenSettings: () => void 
             <Settings size={15} />
           </button>
         </Tooltip>
+
+        <ThemeToggle size="sm" />
 
         <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />
 

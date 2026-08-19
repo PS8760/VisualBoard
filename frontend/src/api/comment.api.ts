@@ -1,7 +1,7 @@
 import { client, apiErrorMessage } from './client';
 import type { CommentItem } from '../types';
 
-interface BackendComment {
+export interface BackendComment {
   id: number;
   board_id: number;
   user_id: number;
@@ -15,7 +15,7 @@ interface BackendComment {
   author?: { id: number; name: string; email: string; avatar?: string | null } | null;
 }
 
-function mapComment(raw: BackendComment): CommentItem {
+export function mapComment(raw: BackendComment): CommentItem {
   const u = raw.users ?? raw.author;
   return {
     id: String(raw.id),
@@ -50,8 +50,8 @@ export async function createComment(
     const { data } = await client.post<{ data?: BackendComment }>(`/boards/${boardId}/comments`, {
       content: payload.text,
       element_id: payload.elementId,
-      x_position: payload.x,
-      y_position: payload.y,
+      x: payload.x,
+      y: payload.y,
     });
     return data?.data ? mapComment(data.data) : null;
   } catch {

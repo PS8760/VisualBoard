@@ -11,6 +11,7 @@ import { useUIStore } from '../../stores/useUIStore';
 import { TOOL_LABEL } from '../../utils/shortcuts';
 import { elementId } from '../../services/fabric.elements';
 import { animateArrangement, completionPulse } from '../../animations/boardAnimations';
+import { arrangeBoard } from '../../api/board.api';
 import type { FabricObject } from 'fabric';
 
 export default function StatusBar() {
@@ -21,12 +22,26 @@ export default function StatusBar() {
   const viewport = useCanvasStore((s) => s.viewport);
   const gridVisible = useCanvasStore((s) => s.gridVisible);
 
-  const arrange = () => {
-    const { arrange, updateElement } = useBoardStore.getState();
+  const arrange = async () => {
+    const { updateElement } = useBoardStore.getState();
     const canvas = useCanvasStore.getState().canvas;
-    if (!canvas || !board?.elements.length) return;
+    if (!canvas || !board?.elements.length || !board.id) return;
 
-    const targets = arrange();
+    // Call backend arrange API
+    const result = await arrangeBoard(board.id);
+    
+    if (!result.ok || !result.positions) {
+      toast.error('Arrangement failed', { description: result.message ?? 'Could not arrange elements' });
+      return;
+    }
+
+    // Map backend response to targets for animation
+    const targets = Object.entries(result.positions).map(([id, pos]) => ({
+      id,
+      x: pos.x,
+      y: pos.y,
+    }));
+
     const objects = targets
       .map((t) => {
         const obj = canvas

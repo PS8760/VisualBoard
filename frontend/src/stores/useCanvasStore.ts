@@ -27,6 +27,8 @@ interface CanvasState {
   resetView: () => void;
   toggleGrid: () => void;
   setGrid: (visible: boolean) => void;
+  /** Update canvas background when the app theme changes */
+  applyTheme: (isDark: boolean) => void;
   worldToScreen: (x: number, y: number) => { x: number; y: number };
   screenToWorld: (x: number, y: number) => { x: number; y: number };
 }
@@ -101,6 +103,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     toggleGrid: () => set((s) => ({ gridVisible: !s.gridVisible })),
     setGrid: (gridVisible) => set({ gridVisible }),
+
+    applyTheme: (isDark) => {
+      const { canvas } = get();
+      if (!canvas) return;
+      // Update canvas background to match the CSS variable value
+      canvas.backgroundColor = isDark ? '#1b1a17' : '#fdfdfc';
+      canvas.requestRenderAll();
+    },
 
     worldToScreen: (x, y) => {
       const { viewport } = get();

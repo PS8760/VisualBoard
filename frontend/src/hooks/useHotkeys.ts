@@ -29,8 +29,12 @@ export function useHotkeys(bindings: HotkeyBinding[], deps: unknown[] = []) {
       const key = e.key.toLowerCase();
 
       for (const binding of bindings) {
-        const modifierMatch =
-          binding.ctrl === e.ctrlKey && binding.meta === e.metaKey && binding.shift === e.shiftKey;
+        // Modifier matching: if binding specifies a modifier, it must match the event state
+        // If binding doesn't specify a modifier (undefined), the modifier must NOT be pressed
+        const ctrlMatch = (binding.ctrl ?? false) === e.ctrlKey;
+        const metaMatch = (binding.meta ?? false) === e.metaKey;
+        const shiftMatch = (binding.shift ?? false) === e.shiftKey;
+        const modifierMatch = ctrlMatch && metaMatch && shiftMatch;
 
         let keyMatch: boolean;
         if (binding.key === 'mod') {
@@ -42,7 +46,6 @@ export function useHotkeys(bindings: HotkeyBinding[], deps: unknown[] = []) {
         }
 
         if (!keyMatch || !modifierMatch) continue;
-        if (binding.shift && e.key === key && binding.shift !== e.shiftKey) continue;
 
         if (binding.skipWhenTyping && isTypingTarget(e.target)) continue;
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Logo from '../../components/ui/Logo';
 import { Button } from '../../components/ui/Button';
+import { ThemeToggle } from '../../components/ui/ThemeToggle';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { cn } from '../../utils';
 import { useSmoothScroll } from '../../hooks/useSmoothScroll';
@@ -87,6 +88,7 @@ export default function Navbar() {
               </Link>
             </>
           )}
+          <ThemeToggle size="sm" className="ml-1 hidden md:flex" />
           <button
             className="ml-1 flex h-8 w-8 items-center justify-center rounded-md border border-line text-ink-2 md:hidden"
             onClick={() => setMenuOpen((v) => !v)}
@@ -105,7 +107,7 @@ export default function Navbar() {
       </nav>
 
       {menuOpen && (
-        <div className="border-b border-line bg-paper px-5 pb-4 pt-2 md:hidden">
+      <div className="border-b border-line bg-paper px-5 pb-4 pt-2 md:hidden">
           {NAV_LINKS.map((link) => (
             <a
               key={link.label}
@@ -116,11 +118,14 @@ export default function Navbar() {
               {link.label}
             </a>
           ))}
-          <Link to="/login" onClick={() => setMenuOpen(false)}>
-            <Button variant="secondary" size="sm" className="mt-2 w-full">
-              Login
-            </Button>
-          </Link>
+          <div className="mt-2 flex items-center gap-2">
+            <Link to="/login" onClick={() => setMenuOpen(false)} className="flex-1">
+              <Button variant="secondary" size="sm" className="w-full">
+                Login
+              </Button>
+            </Link>
+            <ThemeToggle size="sm" />
+          </div>
         </div>
       )}
     </header>

@@ -3,6 +3,9 @@ import { useParams } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import TopBar from './TopBar';
 import Toolbar from './Toolbar';
+import PenToolbar from './PenToolbar';
+import OnboardingOverlay from './OnboardingOverlay';
+import HelpButton from './HelpButton';
 import StatusBar from './StatusBar';
 import CanvasStage from './CanvasStage';
 import RightPanel from './RightPanel';
@@ -93,25 +96,11 @@ export default function Board() {
     };
   }, [boardId]);
 
-  // ---- architecture suggestions ----------------------------------------------
+  // ---- architecture suggestions (local rule-based engine) ------------------
   useEffect(() => {
     if (!board?.id) return;
-    (async () => {
-      try {
-        const res = await fetch(`/api/v1/suggestions/board/${board.id}`);
-        const json = await res.json();
-        if (json?.success && Array.isArray(json.data)) {
-          useSuggestionStore.getState().evaluate(json.data);
-        } else {
-          // fallback to local heuristics
-          const suggestions = useBoardStore.getState().suggestions();
-          useSuggestionStore.getState().evaluate(suggestions);
-        }
-      } catch (e) {
-        const suggestions = useBoardStore.getState().suggestions();
-        useSuggestionStore.getState().evaluate(suggestions);
-      }
-    })();
+    const suggestions = useBoardStore.getState().suggestions();
+    useSuggestionStore.getState().evaluate(suggestions);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board?.id, board?.elements.length]);
 
@@ -157,23 +146,115 @@ export default function Board() {
       {
         key: 'escape',
         handler: () => {
+          const currentTool = useToolStore.getState().tool;
+          // Escape switches back to select tool unless already on select
+          if (currentTool !== 'select') {
+            setTool('select');
+          }
+          // Also close modals/panels
           useUIStore.getState().setCommandPalette(false);
           useUIStore.getState().setVersionTimeline(false);
           useUIStore.getState().setActiveComment(null);
         },
       },
-        { key: 'a', shift: true, skipWhenTyping: true, handler: () => document.getElementById('arrange-button')?.click() },
+      { key: 'a', shift: true, skipWhenTyping: true, handler: () => document.getElementById('arrange-button')?.click() },
+      // Copy/Paste/Duplicate
+      {
+        key: 'c',
+        meta: true,
+        skipWhenTyping: true,
+        handler: () => {
+          const ids = useBoardStore.getState().selectedIds;
+          if (ids.length) useBoardStore.getState().copyElements(ids);
+        },
+      },
+      {
+        key: 'c',
+        ctrl: true,
+        skipWhenTyping: true,
+        handler: () => {
+          const ids = useBoardStore.getState().selectedIds;
+          if (ids.length) useBoardStore.getState().copyElements(ids);
+        },
+      },
+      {
+        key: 'v',
+        meta: true,
+        skipWhenTyping: true,
+        handler: () => useBoardStore.getState().pasteElements(),
+      },
+      {
+        key: 'v',
+        ctrl: true,
+        skipWhenTyping: true,
+        handler: () => useBoardStore.getState().pasteElements(),
+      },
+      {
+        key: 'd',
+        meta: true,
+        skipWhenTyping: true,
+        handler: () => {
+          const ids = useBoardStore.getState().selectedIds;
+          if (ids.length) useBoardStore.getState().duplicateElements(ids);
+        },
+      },
+      {
+        key: 'd',
+        ctrl: true,
+        skipWhenTyping: true,
+        handler: () => {
+          const ids = useBoardStore.getState().selectedIds;
+          if (ids.length) useBoardStore.getState().duplicateElements(ids);
+        },
+      },
+      // Select All
+      {
+        key: 'a',
+        meta: true,
+        skipWhenTyping: true,
+        handler: () => {
+          const board = useBoardStore.getState().board;
+          if (board) {
+            const ids = board.elements.map((el) => el.id);
+            useBoardStore.getState().select(ids);
+          }
+        },
+      },
+      {
+        key: 'a',
+        ctrl: true,
+        skipWhenTyping: true,
+        handler: () => {
+          const board = useBoardStore.getState().board;
+          if (board) {
+            const ids = board.elements.map((el) => el.id);
+            useBoardStore.getState().select(ids);
+          }
+        },
+      },
+      // Zoom presets
+      { key: '1', skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomTo(1) },
+      { key: '2', skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomTo(0.5) },
+      { key: '3', skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomTo(2) },
+      { key: '0', skipWhenTyping: true, handler: () => useCanvasStore.getState().resetView() },
+      // Zoom in/out with keyboard
+      { key: '=', meta: true, skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomBy(1.2) },
+      { key: '=', ctrl: true, skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomBy(1.2) },
+      { key: '-', meta: true, skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomBy(0.8) },
+      { key: '-', ctrl: true, skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomBy(0.8) },
     ],
     [boardId, setTool, setCommandPalette],
   );
 
   const panelOpen = useUIStore((s) => s.rightPanelOpen);
+  const tool = useToolStore((s) => s.tool);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-paper text-ink">
       <TopBar onOpenSettings={() => setSettingsOpen(true)} />
       <div className="relative flex flex-1 overflow-hidden">
         <Toolbar />
+        {tool === 'pen' && <PenToolbar />}
         <div className="relative flex-1 overflow-hidden">
           <CanvasStage />
           <CursorsOverlay />
@@ -206,6 +287,8 @@ export default function Board() {
       <StatusBar />
       <CommandPalette />
       <DocumentPreview />
+      <OnboardingOverlay />
+      <HelpButton />
       <BoardSettingsModal boardId={boardId} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <button
         id="arrange-trigger"

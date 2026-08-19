@@ -27,6 +27,30 @@ const WAYPOINTS: Array<[number, number]> = [
 
 const PRESENCE_COLORS = ['#d9480f', '#2f9e44', '#1971c2', '#e8590c', '#7048e8', '#0c8599'];
 
+interface SocketLike {
+  id?: string;
+  close: () => void;
+  emit: (event: string, payload: unknown) => void;
+  on: (event: string, fn: (...args: unknown[]) => void) => void;
+  once: (event: string, fn: (...args: unknown[]) => void) => void;
+}
+
+interface RemotePresenceUser {
+  id: string | number;
+  userId?: string | number;
+  name: string;
+  color?: string;
+  cursor?: PresenceUser['cursor'];
+}
+
+interface CursorPayload {
+  id: string | number;
+  userId?: string | number;
+  x: number;
+  y: number;
+  tool: Tool;
+}
+
 function makeSimulatedUsers(): PresenceUser[] {
   return DEMO_USERS.slice(1).map((u, i) => ({
     id: u.id,
@@ -39,8 +63,35 @@ function makeSimulatedUsers(): PresenceUser[] {
 
 export const usePresenceStore = create<PresenceState>((set, get) => {
   let simTimer: ReturnType<typeof setInterval> | null = null;
+  let activeBoardId: string | null = null;
   const simOffsets: Record<string, number> = {};
   const waypointIndex: Record<string, number> = {};
+
+  const toLiveBoardId = (boardId: string): number | null => {
+    if (!/^\d+$/.test(boardId)) return null;
+    const parsed = Number(boardId);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  };
+
+  const remoteColor = (index: number) => PRESENCE_COLORS[index % PRESENCE_COLORS.length] ?? PRESENCE_COLORS[0];
+
+  const normalizeRemoteUser = (user: RemotePresenceUser, index: number): PresenceUser => ({
+    id: String(user.id),
+    name: user.name || 'User',
+    color: user.color ?? remoteColor(index),
+    cursor: user.cursor ?? { x: 0, y: 0, tool: 'select' },
+    isLocal: false,
+  });
+
+  const setRemoteUsers = (remoteUsers: RemotePresenceUser[], selfSocketId?: string) => {
+    set((s) => {
+      const localUsers = s.users.filter((u) => u.isLocal);
+      const remotes = remoteUsers
+        .filter((u) => String(u.id) !== selfSocketId)
+        .map((u, index) => normalizeRemoteUser(u, index));
+      return { users: [...localUsers, ...remotes] };
+    });
+  };
 
   const startSimulation = () => {
     const users = makeSimulatedUsers();
@@ -48,7 +99,12 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
       simOffsets[u.id] = i * 137 + 20;
       waypointIndex[u.id] = i;
     });
-    set({ users, mode: 'simulated', status: 'connected' });
+    set((s) => ({
+      users: [...s.users.filter((u) => u.isLocal), ...users],
+      mode: 'simulated',
+      status: 'connected',
+      socket: null,
+    }));
 
     if (simTimer) clearInterval(simTimer);
     simTimer = setInterval(() => {
@@ -86,10 +142,11 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
   const broadcastCursor = throttle((x: number, y: number, tool: Tool) => {
     const { socket, mode, users } = get();
     const local = users.find((u) => u.isLocal);
-    if (!local) return;
+    const boardId = activeBoardId ? toLiveBoardId(activeBoardId) : null;
+    if (!local || !boardId) return;
     if (mode === 'live' && socket) {
       (socket as { emit: (e: string, p: unknown) => void }).emit('cursor:update', {
-        userId: local.id,
+        boardId,
         x, y, tool,
       });
     }
@@ -103,14 +160,22 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
 
     connect: async (boardId) => {
       const { status } = get();
-      if (status === 'connecting' || status === 'connected') return;
+      if ((status === 'connecting' || status === 'connected') && activeBoardId === boardId) return;
+      activeBoardId = boardId;
       set({ status: 'connecting' });
 
+      const liveBoardId = toLiveBoardId(boardId);
       const { io } = await import('socket.io-client');
       const token = localStorage.getItem('vb_token');
+      if (!token || !liveBoardId) {
+        stopSimulation();
+        startSimulation();
+        return;
+      }
+
       const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, {
         transports: ['websocket', 'polling'],
-        auth: token ? { token } : undefined,
+        auth: { token },
         timeout: 2500,
       });
 
@@ -122,7 +187,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
 
       socket.on('connect', () => {
         set({ status: 'connected', mode: 'live', socket });
-        socket.emit('board:join', { boardId });
+        socket.emit('board:join', { boardId: liveBoardId });
       });
 
       socket.on('connect_error', () => {
@@ -131,15 +196,31 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
         startSimulation();
       });
 
-      socket.on('user:join', (user: Omit<PresenceUser, 'isLocal'>) => get().addUser(user));
-      socket.on('user:leave', ({ userId }: { userId: string }) => get().removeUser(userId));
-      socket.on('cursor:update', (payload: { id: string; userId: string; x: number; y: number; tool: Tool }) => {
+      socket.on('board:users', (users: RemotePresenceUser[]) => {
+        setRemoteUsers(Array.isArray(users) ? users : [], (socket as SocketLike).id);
+      });
+      socket.on('user:join', (user: RemotePresenceUser) => {
+        if (String(user.id) !== (socket as SocketLike).id) get().addUser(normalizeRemoteUser(user, get().users.length));
+      });
+      socket.on('user:leave', ({ id }: { id: string | number }) => get().removeUser(String(id)));
+      socket.on('cursor:update', (payload: CursorPayload) => {
         set((s) => ({
-          users: s.users.map((u) =>
-            !u.isLocal && (u.id === payload.id || u.id === payload.userId)
-              ? { ...u, cursor: { x: payload.x, y: payload.y, tool: payload.tool } }
-              : u,
-          ),
+          users: s.users.some((u) => !u.isLocal && (u.id === String(payload.id) || u.id === String(payload.userId)))
+            ? s.users.map((u) =>
+                !u.isLocal && (u.id === String(payload.id) || u.id === String(payload.userId))
+                  ? { ...u, cursor: { x: payload.x, y: payload.y, tool: payload.tool } }
+                  : u,
+              )
+            : [
+                ...s.users,
+                {
+                  id: String(payload.id),
+                  name: 'User',
+                  color: remoteColor(s.users.length),
+                  cursor: { x: payload.x, y: payload.y, tool: payload.tool },
+                  isLocal: false,
+                },
+              ],
         }));
       });
 
@@ -149,9 +230,10 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
 
     disconnect: () => {
       const { socket } = get();
-      if (socket) (socket as { close: () => void }).close();
+      if (socket) (socket as SocketLike).close();
       stopSimulation();
-      set({ users: [], status: 'idle', mode: 'none', socket: null });
+      activeBoardId = null;
+      set((s) => ({ users: s.users.filter((u) => u.isLocal), status: 'idle', mode: 'none', socket: null }));
     },
 
     updateLocalCursor: (x, y, tool) => {

@@ -6,7 +6,7 @@ const ok = (error: unknown): { ok: boolean; message?: string } =>
 
 export async function saveElements(boardId: string, elements: BoardElement[]) {
   try {
-    await client.put(`/boards/${boardId}/elements`, { elements });
+    await client.put(`/boards/${boardId}/elements/bulk`, { elements });
     return { ok: true as const };
   } catch (error) {
     return ok(error);

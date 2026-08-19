@@ -150,4 +150,41 @@ export const removeMember = async (req: AuthRequest, res: Response, next: NextFu
   }
 };
 
-export default { create, list, getById, update, remove, getMembers, add, updateMember, removeMember };
+export const arrangeBoard = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { id } = parseOrThrow(boardIdParamSchema, req.params);
+    await assertBoardRole(req.user, id, 'editor');
+    
+    const { arrangeElements } = await import('./board.arrangement.js');
+    const { listElementsByBoard, updateElement } = await import('../element/element.service.js');
+    
+    const elements = await listElementsByBoard(id);
+    const elementsData = elements.map((el) => {
+      const data = el.element_data as Record<string, unknown>;
+      return {
+        id: el.id,
+        x: typeof data.x === 'number' ? data.x : 0,
+        y: typeof data.y === 'number' ? data.y : 0,
+        width: typeof data.width === 'number' ? data.width : 100,
+        height: typeof data.height === 'number' ? data.height : 100,
+        kind: typeof data.kind === 'string' ? data.kind : undefined,
+        ...data,
+      };
+    });
+    
+    const positions = arrangeElements(elementsData);
+    
+    // Update positions in database
+    const updates = Array.from(positions.entries()).map(async ([elementId, pos]) => {
+      await updateElement(id, elementId, { x: pos.x, y: pos.y });
+    });
+    
+    await Promise.all(updates);
+    
+    sendSuccess(res, { arranged: positions.size, positions: Object.fromEntries(positions) });
+  } catch (e) {
+    next(e);
+  }
+};
+
+export default { create, list, getById, update, remove, getMembers, add, updateMember, removeMember, arrangeBoard };

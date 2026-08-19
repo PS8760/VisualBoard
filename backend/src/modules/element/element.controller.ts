@@ -39,7 +39,7 @@ export const update = async (req: AuthRequest, res: Response, next: NextFunction
     const { boardId, elementId } = parseOrThrow(elementIdParamSchema, req.params);
     const { patch } = parseOrThrow(updateElementSchema, req.body);
     await assertBoardRole(req.user, boardId, 'editor');
-    const row = await updateElement(elementId, patch);
+    const row = await updateElement(boardId, elementId, patch);
     sendSuccess(res, row);
   } catch (e) {
     next(e);
@@ -51,7 +51,7 @@ export const replace = async (req: AuthRequest, res: Response, next: NextFunctio
     const { boardId, elementId } = parseOrThrow(elementIdParamSchema, req.params);
     const { element } = parseOrThrow(createElementSchema, req.body);
     await assertBoardRole(req.user, boardId, 'editor');
-    const row = await replaceElementData(elementId, element);
+    const row = await replaceElementData(boardId, elementId, element);
     sendSuccess(res, row);
   } catch (e) {
     next(e);
@@ -62,7 +62,7 @@ export const remove = async (req: AuthRequest, res: Response, next: NextFunction
   try {
     const { boardId, elementId } = parseOrThrow(elementIdParamSchema, req.params);
     await assertBoardRole(req.user, boardId, 'editor');
-    const removedDocKeys = await deleteElement(elementId);
+    const removedDocKeys = await deleteElement(boardId, elementId);
     const storage = getStorage();
     for (const key of removedDocKeys) {
       await storage.delete(key).catch(() => undefined);

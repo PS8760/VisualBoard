@@ -1,7 +1,16 @@
-import {
-  MousePointer2, Hand, PenLine, Square, Circle as CircleIcon, Minus,
-  MoveUpRight, Type, StickyNote, Image as ImageIcon, FileText,
-  MessageSquare, MoreHorizontal,
+import { 
+  MousePointer2, 
+  Hand, 
+  Pen, 
+  Square, 
+  Circle, 
+  Minus, 
+  ArrowRight, 
+  Type, 
+  StickyNote, 
+  Image, 
+  FileText, 
+  MessageCircle 
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Tooltip } from '../../components/ui/Tooltip';
@@ -19,16 +28,16 @@ interface ToolDef {
 const TOOLS: ToolDef[] = [
   { id: 'select', icon: MousePointer2, label: 'Select', key: 'V' },
   { id: 'hand', icon: Hand, label: 'Hand / Pan', key: 'H' },
-  { id: 'pen', icon: PenLine, label: 'Freehand', key: 'P' },
+  { id: 'pen', icon: Pen, label: 'Pen', key: 'P' },
   { id: 'rect', icon: Square, label: 'Rectangle', key: 'R' },
-  { id: 'circle', icon: CircleIcon, label: 'Circle', key: 'O' },
+  { id: 'circle', icon: Circle, label: 'Circle', key: 'O' },
   { id: 'line', icon: Minus, label: 'Line', key: 'L' },
-  { id: 'arrow', icon: MoveUpRight, label: 'Arrow', key: 'A' },
+  { id: 'arrow', icon: ArrowRight, label: 'Arrow', key: 'A' },
   { id: 'text', icon: Type, label: 'Text', key: 'T' },
-  { id: 'sticky', icon: StickyNote, label: 'Sticky note', key: 'S' },
-  { id: 'image', icon: ImageIcon, label: 'Image' },
+  { id: 'sticky', icon: StickyNote, label: 'Sticky Note', key: 'S' },
+  { id: 'image', icon: Image, label: 'Image', key: 'I' },
   { id: 'document', icon: FileText, label: 'Document', key: 'D' },
-  { id: 'comment', icon: MessageSquare, label: 'Comment', key: 'C' },
+  { id: 'comment', icon: MessageCircle, label: 'Comment', key: 'C' },
 ];
 
 function ToolButton({ def }: { def: ToolDef }) {
@@ -60,23 +69,9 @@ function ToolButton({ def }: { def: ToolDef }) {
 export default function Toolbar() {
   return (
     <div className="flex w-[46px] shrink-0 flex-col items-center gap-0.5 border-r border-line bg-paper-2/50 py-2">
-      {TOOLS.slice(0, 8).map((def) => (
+      {TOOLS.map((def) => (
         <ToolButton key={def.id} def={def} />
       ))}
-      <div className="my-1.5 h-px w-6 bg-line" aria-hidden="true" />
-      {TOOLS.slice(8).map((def) => (
-        <ToolButton key={def.id} def={def} />
-      ))}
-      <div className="mt-auto flex flex-col items-center gap-0.5">
-        <Tooltip label="More tools" side="right">
-          <button
-            className="flex h-8 w-8 items-center justify-center rounded-sm text-ink-3 hover:bg-paper-2 hover:text-ink-2"
-            aria-label="More tools"
-          >
-            <MoreHorizontal size={15} />
-          </button>
-        </Tooltip>
-      </div>
     </div>
   );
 }

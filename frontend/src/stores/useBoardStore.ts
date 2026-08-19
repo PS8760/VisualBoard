@@ -9,6 +9,7 @@ import { debounce, uid } from '../utils';
 import { computeArrange, type ArrangeTarget } from '../services/arrange';
 import { evaluateSuggestions } from '../services/suggestions';
 import { emitElementEvent } from '../services/realtime';
+import { usePresenceStore } from './usePresenceStore';
 
 interface HistoryEntry {
   elements: BoardElement[];
@@ -22,6 +23,7 @@ interface BoardState {
   error: string | null;
   isDemo: boolean;
   selectedIds: string[];
+  clipboard: BoardElement[];
   saveStatus: SaveStatus;
   history: HistoryEntry[];
   future: HistoryEntry[];
@@ -39,8 +41,13 @@ interface BoardState {
   removeElements: (ids: string[], opts?: { remote?: boolean }) => void;
   clearSelection: () => void;
 
+  copyElements: (ids: string[]) => void;
+  pasteElements: () => void;
+  duplicateElements: (ids: string[]) => void;
+
   addComment: (text: string, opts?: { elementId?: string; x?: number; y?: number }) => void;
-  removeComment: (id: string) => void;
+  upsertComment: (comment: CommentItem, opts?: { clientId?: string }) => void;
+  removeComment: (id: string, opts?: { remote?: boolean }) => void;
 
   loadVersions: () => Promise<void>;
   createVersion: () => Promise<boolean>;
@@ -78,10 +85,48 @@ export const useBoardStore = create<BoardState>((set, get) => {
       set({
         saveStatus: res.ok
           ? { state: 'saved' }
-          : { state: 'offline', message: 'Changes saved on this device' },
+          : { state: 'error', message: res.message ?? 'Save failed — retrying on next change' },
       });
     });
   }, 900);
+
+  const persistElementChange = (sentLive: boolean) => {
+    if (get().isDemo) return;
+    if (sentLive) {
+      set({ saveStatus: { state: 'saving' } });
+      return;
+    }
+    get().save();
+  };
+
+  const markRealtimeSaved = () => {
+    if (!get().isDemo) set({ saveStatus: { state: 'saved' } });
+  };
+
+  const emitSnapshotDiff = (boardId: string, before: BoardElement[], after: BoardElement[]): boolean => {
+    const beforeById = new Map(before.map((el) => [el.id, el]));
+    const afterById = new Map(after.map((el) => [el.id, el]));
+    let sentLive = false;
+
+    before.forEach((el) => {
+      if (!afterById.has(el.id)) {
+        sentLive = emitElementEvent('element:removed', { boardId, id: el.id }) || sentLive;
+      }
+    });
+
+    after.forEach((el) => {
+      const prev = beforeById.get(el.id);
+      if (!prev) {
+        sentLive = emitElementEvent('element:created', { boardId, element: el }) || sentLive;
+        return;
+      }
+      if (JSON.stringify(prev) !== JSON.stringify(el)) {
+        sentLive = emitElementEvent('element:updated', { boardId, id: el.id, patch: el }) || sentLive;
+      }
+    });
+
+    return sentLive;
+  };
 
   return {
     board: null,
@@ -91,6 +136,7 @@ export const useBoardStore = create<BoardState>((set, get) => {
     error: null,
     isDemo: false,
     selectedIds: [],
+    clipboard: [],
     saveStatus: { state: 'idle' },
     history: [],
     future: [],
@@ -151,13 +197,21 @@ export const useBoardStore = create<BoardState>((set, get) => {
     addElement: (element, opts) => {
       const { board } = get();
       if (!board) return;
-      pushHistory();
+      const exists = board.elements.some((el) => el.id === element.id);
+      if (opts?.remote) {
+        if (exists) {
+          get().updateElement(element.id, element, { remote: true });
+          return;
+        }
+      } else {
+        pushHistory();
+      }
       set({
         board: { ...board, elements: [...board.elements, element], updatedAt: new Date().toISOString() },
         arranged: false,
+        revision: opts?.remote ? Date.now() : get().revision,
       });
       get().save();
-      // broadcast to peers when initiated locally
       if (!opts?.remote) {
         emitElementEvent('element:created', { boardId: board.id, element });
       }
@@ -167,6 +221,7 @@ export const useBoardStore = create<BoardState>((set, get) => {
       const { board } = get();
       if (!board) return;
       const prev = board.elements.find((el) => el.id === id);
+      if (!prev && opts?.remote) return;
       set({
         board: {
           ...board,
@@ -176,6 +231,7 @@ export const useBoardStore = create<BoardState>((set, get) => {
           updatedAt: new Date().toISOString(),
         },
         arranged: false,
+        revision: opts?.remote ? Date.now() : get().revision,
       });
       get().save();
       if (!opts?.remote) {
@@ -187,7 +243,7 @@ export const useBoardStore = create<BoardState>((set, get) => {
       const { board, selectedIds } = get();
       if (!board) return;
       const idSet = new Set(ids);
-      pushHistory();
+      if (!opts?.remote) pushHistory();
       set({
         board: {
           ...board,
@@ -195,6 +251,7 @@ export const useBoardStore = create<BoardState>((set, get) => {
           updatedAt: new Date().toISOString(),
         },
         selectedIds: selectedIds.filter((id) => !idSet.has(id)),
+        revision: Date.now(),
       });
       get().save();
       if (!opts?.remote) {
@@ -204,12 +261,81 @@ export const useBoardStore = create<BoardState>((set, get) => {
 
     clearSelection: () => set({ selectedIds: [] }),
 
+    copyElements: (ids) => {
+      const { board } = get();
+      if (!board) return;
+      const elements = board.elements.filter((el) => ids.includes(el.id));
+      set({ clipboard: elements });
+    },
+
+    pasteElements: () => {
+      const { board, clipboard } = get();
+      if (!board || !clipboard.length) return;
+
+      pushHistory();
+      const newElements: BoardElement[] = clipboard.map((el) => ({
+        ...el,
+        id: uid('el'),
+        x: el.x + 20,
+        y: el.y + 20,
+        version: 1,
+      }));
+
+      set({
+        board: {
+          ...board,
+          elements: [...board.elements, ...newElements],
+          updatedAt: new Date().toISOString(),
+        },
+        selectedIds: newElements.map((el) => el.id),
+        revision: Date.now(),
+      });
+
+      newElements.forEach((el) => {
+        emitElementEvent('element:created', { boardId: board.id, element: el });
+      });
+
+      get().save();
+    },
+
+    duplicateElements: (ids) => {
+      const { board } = get();
+      if (!board) return;
+
+      pushHistory();
+      const elements = board.elements.filter((el) => ids.includes(el.id));
+      const newElements: BoardElement[] = elements.map((el) => ({
+        ...el,
+        id: uid('el'),
+        x: el.x + 20,
+        y: el.y + 20,
+        version: 1,
+      }));
+
+      set({
+        board: {
+          ...board,
+          elements: [...board.elements, ...newElements],
+          updatedAt: new Date().toISOString(),
+        },
+        selectedIds: newElements.map((el) => el.id),
+        revision: Date.now(),
+      });
+
+      newElements.forEach((el) => {
+        emitElementEvent('element:created', { boardId: board.id, element: el });
+      });
+
+      get().save();
+    },
+
     addComment: (text, opts) => {
       const { board } = get();
       if (!board) return;
       const author = { id: 'u_local', name: 'You', color: '#d9480f' };
+      const clientId = uid('c_temp');
       const comment: CommentItem = {
-        id: uid('c'),
+        id: clientId,
         boardId: board.id,
         elementId: opts?.elementId,
         x: opts?.x,
@@ -219,26 +345,73 @@ export const useBoardStore = create<BoardState>((set, get) => {
         createdAt: new Date().toISOString(),
       };
       set({ comments: [...get().comments, comment] });
+
       if (opts?.elementId) {
         const el = board.elements.find((e) => e.id === opts.elementId);
         get().updateElement(opts.elementId, {
           commentCount: (el?.commentCount ?? 0) + 1,
         });
       }
+
+      // Emit real-time event to other collaborators
+      const { socket, mode } = usePresenceStore.getState();
+      if (mode === 'live' && socket) {
+        (socket as any).emit('comment:created', {
+          boardId: board.id,
+          content: text,
+          element_id: opts?.elementId,
+          x: opts?.x,
+          y: opts?.y,
+          clientId,
+        });
+      }
+
       commentApi.createComment(board.id, { text, elementId: opts?.elementId, x: opts?.x, y: opts?.y }).then((saved) => {
         if (saved && !get().isDemo) {
+          // Replace the optimistic temp entry with the saved one
           set({
-            comments: get().comments.map((c) => (c.id === comment.id ? saved : c)),
+            comments: get().comments.map((c) => (c.id === clientId ? saved : c)),
           });
-          emitElementEvent('comment:created', { boardId: board.id, comment: saved });
+          // Do NOT emit a second socket event here — the raw socket emit above
+          // already notified collaborators. A second emit causes the server to
+          // broadcast again and produces duplicate comments for everyone.
         }
       });
     },
 
-    removeComment: (id) => {
+    upsertComment: (comment, opts) => {
+      set((s) => {
+        // If we have a clientId, this is the server echo of our own optimistic comment.
+        // Replace the temp entry instead of appending a duplicate.
+        if (opts?.clientId) {
+          const hasTemp = s.comments.some((c) => c.id === opts.clientId);
+          if (hasTemp) {
+            return { comments: s.comments.map((c) => (c.id === opts.clientId ? comment : c)) };
+          }
+        }
+        // Deduplicate by real server id — if we already reconciled this comment, skip it.
+        if (s.comments.some((c) => c.id === comment.id)) return s;
+        // Genuinely new comment from a collaborator — append it.
+        return { comments: [...s.comments, comment] };
+      });
+    },
+
+    removeComment: (id, opts) => {
       const { board } = get();
       if (!board) return;
       set({ comments: get().comments.filter((c) => c.id !== id) });
+
+      // Emit real-time event if not from remote
+      if (!opts?.remote) {
+        const { socket, mode } = usePresenceStore.getState();
+        if (mode === 'live' && socket) {
+          (socket as any).emit('comment:removed', {
+            boardId: board.id,
+            id,
+          });
+        }
+      }
+
       void commentApi.deleteComment(board.id, id);
     },
 

@@ -50,6 +50,9 @@ export default function CommandPalette() {
 
   const commands = useMemo<CommandItem[]>(() => {
     const close = () => setOpen(false);
+    const selectedIds = useBoardStore.getState().selectedIds;
+    const hasSelection = selectedIds.length > 0;
+
     return [
       {
         id: 'new-board', label: 'Create board', icon: Plus,
@@ -68,11 +71,48 @@ export default function CommandPalette() {
         },
       },
       {
-        id: 'add-text', label: 'Add text', icon: Type,
+        id: 'copy', label: hasSelection ? `Copy ${selectedIds.length} element${selectedIds.length > 1 ? 's' : ''}` : 'Copy', icon: Plus, hint: '⌘C',
+        run: () => {
+          if (hasSelection) {
+            useBoardStore.getState().copyElements(selectedIds);
+            toast.success('Copied to clipboard');
+          }
+          close();
+        },
+      },
+      {
+        id: 'paste', label: 'Paste', icon: Plus, hint: '⌘V',
+        run: () => {
+          useBoardStore.getState().pasteElements();
+          close();
+        },
+      },
+      {
+        id: 'duplicate', label: hasSelection ? `Duplicate ${selectedIds.length} element${selectedIds.length > 1 ? 's' : ''}` : 'Duplicate', icon: Plus, hint: '⌘D',
+        run: () => {
+          if (hasSelection) {
+            useBoardStore.getState().duplicateElements(selectedIds);
+            toast.success('Duplicated');
+          }
+          close();
+        },
+      },
+      {
+        id: 'delete', label: hasSelection ? `Delete ${selectedIds.length} element${selectedIds.length > 1 ? 's' : ''}` : 'Delete', icon: Plus, hint: 'Del',
+        run: () => {
+          if (hasSelection) {
+            useBoardStore.getState().removeElements(selectedIds);
+            toast.success('Deleted');
+          }
+          close();
+        },
+      },
+      {
+        id: 'add-text', label: 'Add text', icon: Type, hint: 'T',
         run: () => { useToolStore.getState().setTool('text'); close(); },
       },
       {
-        id: 'add-shape', label: 'Add shape', icon: Square,
+        id: 'add-shape', label: 'Add shape', icon: Square, hint: 'R',
         run: () => { useToolStore.getState().setTool('rect'); close(); },
       },
       {
@@ -83,7 +123,7 @@ export default function CommandPalette() {
         },
       },
       {
-        id: 'add-comment', label: 'Add comment', icon: MessageSquare,
+        id: 'add-comment', label: 'Add comment', icon: MessageSquare, hint: 'C',
         run: () => { useToolStore.getState().setTool('comment'); close(); },
       },
       {
@@ -93,13 +133,13 @@ export default function CommandPalette() {
       {
         id: 'share', label: 'Share board', icon: Share2,
         run: () => {
-          navigator.clipboard?.writeText(window.location.href).catch(() => {});
+          navigator.clipboard?.writeText(window.location.href).catch(() => { });
           toast.success('Share link copied');
           close();
         },
       },
       {
-        id: 'grid', label: 'Toggle grid', icon: Grid3X3,
+        id: 'grid', label: 'Toggle grid', icon: Grid3X3, hint: 'G',
         run: () => { useCanvasStore.getState().toggleGrid(); close(); },
       },
       {

@@ -45,6 +45,12 @@ export type CommentCreatePayload = {
   element_id?: string | null;
   x?: number | null;
   y?: number | null;
+  clientId?: string | null;
+};
+
+export type CommentDeletePayload = {
+  boardId: number;
+  id: number;
 };
 
 export type SocketPayloads = {
@@ -55,6 +61,7 @@ export type SocketPayloads = {
   [SocketEvents.ELEMENT_UPDATED]: ElementUpdatePayload;
   [SocketEvents.ELEMENT_REMOVED]: ElementDeletePayload;
   [SocketEvents.COMMENT_CREATED]: CommentCreatePayload;
+  [SocketEvents.COMMENT_REMOVED]: CommentDeletePayload;
 };
 
 export default {};

@@ -10,6 +10,7 @@ import {
   invite,
   updateMember,
   removeMember,
+  arrangeBoard,
 } from './board.controller.js';
 import { authenticate } from '../../middleware/auth.middleware.js';
 import { writeLimiter } from '../../middleware/rate-limit.middleware.js';
@@ -27,5 +28,7 @@ boardRoutes.post('/boards/:id/members', authenticate, writeLimiter, add);
 boardRoutes.post('/boards/:id/members/invite', authenticate, writeLimiter, invite);
 boardRoutes.put('/boards/:id/members/:userId', authenticate, writeLimiter, updateMember);
 boardRoutes.delete('/boards/:id/members/:userId', authenticate, writeLimiter, removeMember);
+
+boardRoutes.post('/boards/:id/arrange', authenticate, writeLimiter, arrangeBoard);
 
 export default boardRoutes;
