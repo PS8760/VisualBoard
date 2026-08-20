@@ -31,7 +31,7 @@ import {
 } from '../../services/fabric.elements';
 import { uid } from '../../utils';
 import { uploadDocument } from '../../api/document.api';
-import type { AttachmentMeta, BoardElement } from '../../types';
+import type { BoardElement } from '../../types';
 import { CanvasSkeleton } from '../../components/ui/Skeleton';
 import EmptyBoard from './EmptyBoard';
 
@@ -58,9 +58,21 @@ export default function CanvasStage() {
   const penColor = useToolStore((s) => s.penColor);
 
   // ----- tool switching ----------------------------------------------------
+  const activeToolRef = useRef<typeof tool>('select');
   useEffect(() => {
     const canvas = useCanvasStore.getState().canvas;
     if (!canvas) return;
+
+    // Cancel an in-progress drawing gesture when the tool changes so the
+    // temporary object can never leak into another tool's state.
+    if (activeToolRef.current !== tool && drawingRef.current) {
+      if (drawingRef.current.object) canvas.remove(drawingRef.current.object);
+      drawingRef.current = null;
+      setDrawingDims(null);
+      canvas.requestRenderAll();
+    }
+    activeToolRef.current = tool;
+
     const isPen = tool === 'pen';
 
     canvas.isDrawingMode = isPen;
@@ -111,7 +123,10 @@ export default function CanvasStage() {
     }
   }, [tool, penWidth, penColor]);
 
-  const shouldPan = (e: MouseEvent) => tool === 'hand' || spaceDownRef.current || e.button === 1;
+  const shouldPan = (e: MouseEvent) => {
+    const current = useToolStore.getState().tool;
+    return current === 'hand' || spaceDownRef.current || e.button === 1;
+  };
 
   function broadcastCursor(opt: TPointerEventInfo<TPointerEvent>) {
     const { screenToWorld } = useCanvasStore.getState();
@@ -142,6 +157,8 @@ export default function CanvasStage() {
     const onMouseDown = (opt: TPointerEventInfo<TPointerEvent>) => {
       const e = opt.e as MouseEvent;
       const pointer = opt.scenePoint ?? opt.viewportPoint;
+      // Read the current tool live — never a stale render-time value.
+      const activeTool = useToolStore.getState().tool;
 
       // Store last click position for image placement
       lastClickRef.current = { x: pointer.x, y: pointer.y };
@@ -159,11 +176,11 @@ export default function CanvasStage() {
         return;
       }
 
-      if (tool === 'image') {
+      if (activeTool === 'image') {
         fileInputRef.current?.click();
         return;
       }
-      if (tool === 'document') {
+      if (activeTool === 'document') {
         const el: BoardElement = {
           id: uid('el'),
           kind: 'document',
@@ -179,14 +196,20 @@ export default function CanvasStage() {
           content: 'document.pdf',
           version: 1,
         };
+        const obj = materializeElement(el);
+        canvas.add(obj);
+        objectMapRef.current.set(el.id, obj);
         useBoardStore.getState().addElement(el);
         toast.info('Drop a file onto the card to attach it');
         useToolStore.getState().setTool('select');
         return;
       }
 
+      // Pen strokes are driven entirely by fabric's free-drawing brush.
+      if (activeTool === 'pen') return;
+
       // handle select rubber-band start
-      if (tool === 'select') {
+      if (activeTool === 'select') {
         const hit = findObjectAt(canvas, pointer.x, pointer.y);
         if (!hit) {
           selectionOriginRef.current = { x: pointer.x, y: pointer.y };
@@ -210,7 +233,7 @@ export default function CanvasStage() {
         }
       }
 
-      const drawing = startDrawing(canvas, tool as DrawingState['kind'], pointer);
+      const drawing = startDrawing(canvas, activeTool as DrawingState['kind'], pointer);
 
       if (drawing.type === 'text' && drawing.object) {
         drawingRef.current = null;
@@ -301,12 +324,13 @@ export default function CanvasStage() {
 
     const onMouseUp = (opt: TPointerEventInfo<TPointerEvent>) => {
       setDrawingDims(null);
+      const activeTool = useToolStore.getState().tool;
       if (panningRef.current) {
         panningRef.current = null;
-        canvas.selection = tool === 'select';
-        canvas.skipTargetFind = tool === 'hand';
-        canvas.defaultCursor = tool === 'hand' ? 'grab' : 'default';
-        canvas.hoverCursor = tool === 'hand' ? 'grab' : (tool === 'select' ? 'move' : 'default');
+        canvas.selection = activeTool === 'select';
+        canvas.skipTargetFind = activeTool === 'hand';
+        canvas.defaultCursor = activeTool === 'hand' ? 'grab' : 'default';
+        canvas.hoverCursor = activeTool === 'hand' ? 'grab' : (activeTool === 'select' ? 'move' : 'default');
         canvas.requestRenderAll();
         return;
       }
@@ -378,19 +402,20 @@ export default function CanvasStage() {
 
     const onPathCreated = (opt: { path?: FabricObject }) => {
       if (!opt.path) return;
+      // The raw fabric path has no app data, so stamp a stable id + kind
+      // before serializing. Without this the stroke is never registered in
+      // board state and never persisted.
+      asVB(opt.path).data = { id: uid('el'), kind: 'pen' };
       const el = serializeElement(opt.path);
-      if (el) {
-        el.id = uid('el');
-        el.kind = 'pen';
-        // Preserve the pen settings
-        el.stroke = useToolStore.getState().penColor;
-        el.strokeWidth = useToolStore.getState().penWidth;
-        const obj = materializeElement(el);
-        canvas.remove(opt.path);
-        canvas.add(obj);
-        objectMapRef.current.set(el.id, obj);
-        useBoardStore.getState().addElement(el);
-      }
+      if (!el) return;
+      // Preserve the pen settings
+      el.stroke = useToolStore.getState().penColor;
+      el.strokeWidth = useToolStore.getState().penWidth;
+      const obj = materializeElement(el);
+      canvas.remove(opt.path);
+      canvas.add(obj);
+      objectMapRef.current.set(el.id, obj);
+      useBoardStore.getState().addElement(el);
     };
 
     const onSelection = () => {
@@ -414,10 +439,11 @@ export default function CanvasStage() {
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
+      const currentTool = useToolStore.getState().tool;
       if (e.code === 'Space') {
         spaceDownRef.current = false;
-        canvas.defaultCursor = tool === 'hand' ? 'grab' : 'default';
-        canvas.hoverCursor = tool === 'hand' ? 'grab' : (tool === 'select' ? 'move' : 'default');
+        canvas.defaultCursor = currentTool === 'hand' ? 'grab' : 'default';
+        canvas.hoverCursor = currentTool === 'hand' ? 'grab' : (currentTool === 'select' ? 'move' : 'default');
         canvas.requestRenderAll();
       }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftDownRef.current = false;
@@ -456,28 +482,32 @@ export default function CanvasStage() {
       }
     };
 
-    const onDrop = (e: DragEvent) => {
+    const onDrop = async (e: DragEvent) => {
       const files = Array.from(e.dataTransfer?.files ?? []);
       if (!files.length) return;
       e.preventDefault();
 
+      const boardId = useBoardStore.getState().board?.id;
+      if (!boardId) return;
+
       const rect = host.getBoundingClientRect();
       const world = useCanvasStore.getState().screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
       const hit = findObjectAt(canvas, world.x, world.y);
+      const targetId =
+        hit && elementKind(hit) !== 'comment' ? elementId(hit) : undefined;
 
-      files.forEach((file) => {
-        const attachment: AttachmentMeta = {
-          id: uid('att'),
-          name: file.name,
-          type: file.type || 'application/octet-stream',
-          size: file.size,
-          uploadedAt: new Date().toISOString(),
-        };
+      for (const file of files) {
+        // Upload the actual file so it is persisted and downloadable.
+        const res = await uploadDocument(boardId, file, targetId);
+        if (!res.ok) {
+          toast.error(`Could not upload ${file.name}`, { description: res.message });
+          continue;
+        }
+        const attachment = res.attachment;
 
-        if (hit && elementKind(hit) !== 'comment') {
-          const id = elementId(hit);
-          if (id) {
-            useBoardStore.getState().updateElement(id, { attachment });
+        if (targetId) {
+          useBoardStore.getState().updateElement(targetId, { attachment });
+          if (hit) {
             asVB(hit).data = { ...asVB(hit).data, attachment };
             canvas.requestRenderAll();
           }
@@ -499,11 +529,16 @@ export default function CanvasStage() {
             attachment,
             version: 1,
           };
+          const obj = materializeElement(el);
+          canvas.add(obj);
+          objectMapRef.current.set(el.id, obj);
           useBoardStore.getState().addElement(el);
           toast.success(`${file.name} added to the board`);
         }
-      });
+      }
     };
+
+    const onDragOver = (e: DragEvent) => e.preventDefault();
 
     canvas.on('mouse:wheel', onWheel);
     canvas.on('mouse:down', onMouseDown);
@@ -525,7 +560,7 @@ export default function CanvasStage() {
 
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
-    host.addEventListener('dragover', (e) => e.preventDefault());
+    host.addEventListener('dragover', onDragOver);
     host.addEventListener('drop', onDrop);
 
     return () => {
@@ -542,6 +577,7 @@ export default function CanvasStage() {
       canvas.off('text:changed');
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      host.removeEventListener('dragover', onDragOver);
       host.removeEventListener('drop', onDrop);
     };
   }

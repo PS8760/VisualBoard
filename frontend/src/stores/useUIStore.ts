@@ -6,7 +6,7 @@ interface UIState {
   rightPanelTab: PanelTab;
   commandPaletteOpen: boolean;
   versionTimelineOpen: boolean;
-  documentPreview: { id: string; name: string; type: string; size: number; uploadedAt: string } | null;
+  documentPreview: { id: string; name: string; type: string; size: number; uploadedAt: string; url?: string } | null;
   activeComment: { elementId: string; x: number; y: number } | null;
   arrangeComplete: boolean;
   shortcutTooltip: string | null;

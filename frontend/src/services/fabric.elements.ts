@@ -22,6 +22,21 @@ export interface VBData {
   commentCount?: number;
 }
 
+/** A fabric path segment, e.g. ["M", x, y] or ["Q", cx, cy, x, y]. */
+export type TPathData = Array<[string, ...number[]]>;
+
+/** Converts fabric path segments into a flat [x0,y0,x1,y1,...] point list. */
+export function flattenPathPoints(segments: Array<unknown[] | [string, ...number[]]>): number[] {
+  const points: number[] = [];
+  for (const seg of segments) {
+    for (let i = 1; i < seg.length; i++) {
+      const v = seg[i];
+      if (typeof v === 'number' && Number.isFinite(v)) points.push(v);
+    }
+  }
+  return points;
+}
+
 export type VBObj = FabricObject & { data?: VBData };
 
 export const CANVAS_COLORS = {
@@ -168,16 +183,34 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
         strokeWidth: el.strokeWidth || 1.75,
       });
     case 'pen': {
-      if (el.points && el.points.length >= 4) {
-        const path = new Path(el.pointsToPath ? el.pointsToPath : pathFromPoints(el.points), {
-          ...shared,
-          stroke: el.stroke || CANVAS_COLORS.penStroke,
-          strokeWidth: el.strokeWidth || 2,
-          fill: null,
-          strokeLineCap: 'round',
-          strokeLineJoin: 'round',
-        });
-        return path;
+      const stroke = el.stroke || CANVAS_COLORS.penStroke;
+      const strokeWidth = el.strokeWidth || 2;
+      const penShared = {
+        ...shared,
+        stroke,
+        strokeWidth,
+        fill: null,
+        strokeLineCap: 'round',
+        strokeLineJoin: 'round',
+      };
+      let pathData: unknown = null;
+      if (el.pointsToPath) {
+        try {
+          const parsed = JSON.parse(el.pointsToPath);
+          if (Array.isArray(parsed)) pathData = parsed;
+        } catch {
+          pathData = el.pointsToPath;
+        }
+      }
+      if (!pathData && el.points && el.points.length >= 4) {
+        pathData = pathFromPoints(el.points);
+      }
+      if (pathData) {
+        const PenPath = Path as unknown as new (
+          path: unknown,
+          options: Record<string, unknown>,
+        ) => Path;
+        return new PenPath(pathData, penShared);
       }
       return new Rect({ ...shared, width: 1, height: 1, fill: 'transparent', stroke: 'transparent' });
     }
@@ -288,12 +321,14 @@ export function serializeElement(obj: FabricObject): BoardElement | null {
     };
   }
   if (obj instanceof Path) {
+    const segments = obj.path as unknown as TPathData;
     return {
       ...common,
       content: '',
       stroke: (obj.stroke as string) ?? CANVAS_COLORS.penStroke,
       strokeWidth: obj.strokeWidth ?? 2,
-      pointsToPath: obj.path ? (obj as { path: unknown }).path as unknown as string : undefined,
+      points: flattenPathPoints(segments),
+      pointsToPath: segments && segments.length ? JSON.stringify(segments) : undefined,
     };
   }
   if (obj instanceof IText) {

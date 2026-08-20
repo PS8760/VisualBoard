@@ -1,11 +1,31 @@
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FileText, X, Download, Eye } from 'lucide-react';
+import { FileText, X, Download, Eye, Loader2 } from 'lucide-react';
 import { useUIStore } from '../../stores/useUIStore';
+import { downloadAttachment } from '../../api/document.api';
 import { formatFileSize, timeAgo } from '../../utils';
+import { toast } from 'sonner';
 
 export default function DocumentPreview() {
   const doc = useUIStore((s) => s.documentPreview);
   const setPreview = useUIStore((s) => s.setDocumentPreview);
+  const setRightPanelTab = useUIStore((s) => s.setRightPanelTab);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (!doc || downloading) return;
+    setDownloading(true);
+    try {
+      const res = await downloadAttachment(doc);
+      if (res.ok) {
+        toast.success('Download started');
+      } else {
+        toast.error('Download failed', { description: res.message });
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <AnimatePresence>
@@ -77,13 +97,21 @@ export default function DocumentPreview() {
               </span>
               <div className="flex gap-2">
                 <button
-                  onClick={() => setPreview(null)}
+                  onClick={() => {
+                    setPreview(null);
+                    setRightPanelTab('documents');
+                  }}
                   className="flex h-7 items-center gap-1.5 rounded-sm border border-line-2 px-2.5 text-[11px] font-medium text-ink-2 transition-colors hover:bg-paper-2 hover:text-ink"
                 >
                   <Eye size={12} /> Open in panel
                 </button>
-                <button className="flex h-7 items-center gap-1.5 rounded-sm bg-ink px-2.5 text-[11px] font-medium text-paper transition-colors hover:bg-black">
-                  <Download size={12} /> Download
+                <button
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  className="flex h-7 items-center gap-1.5 rounded-sm bg-ink px-2.5 text-[11px] font-medium text-paper transition-colors hover:bg-black disabled:opacity-60"
+                >
+                  {downloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                  {downloading ? 'Downloading…' : 'Download'}
                 </button>
               </div>
             </div>

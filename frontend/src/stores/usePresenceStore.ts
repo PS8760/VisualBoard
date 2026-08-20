@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { PresenceUser, Tool } from '../types';
 import { throttle } from '../utils';
 import { DEMO_USERS } from '../data/demo';
+import { useBoardStore } from './useBoardStore';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'offline';
 export type PresenceMode = 'live' | 'simulated' | 'none';
@@ -51,6 +52,15 @@ interface CursorPayload {
   tool: Tool;
 }
 
+/** Resolves a collaborator's real name from the board member profiles. */
+export function profileNameFor(userId?: string | number): string | null {
+  if (userId === undefined || userId === null) return null;
+  const members = useBoardStore.getState().board?.members ?? [];
+  const member = members.find((m) => m.id === String(userId));
+  const name = member?.name;
+  return name && name !== 'User' ? name : null;
+}
+
 function makeSimulatedUsers(): PresenceUser[] {
   return DEMO_USERS.slice(1).map((u, i) => ({
     id: u.id,
@@ -77,7 +87,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
 
   const normalizeRemoteUser = (user: RemotePresenceUser, index: number): PresenceUser => ({
     id: String(user.id),
-    name: user.name || 'User',
+    name: user.name || profileNameFor(user.userId) || 'User',
     color: user.color ?? remoteColor(index),
     cursor: user.cursor ?? { x: 0, y: 0, tool: 'select' },
     isLocal: false,
@@ -208,14 +218,19 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
           users: s.users.some((u) => !u.isLocal && (u.id === String(payload.id) || u.id === String(payload.userId)))
             ? s.users.map((u) =>
                 !u.isLocal && (u.id === String(payload.id) || u.id === String(payload.userId))
-                  ? { ...u, cursor: { x: payload.x, y: payload.y, tool: payload.tool } }
+                  ? {
+                      ...u,
+                      // Upgrade placeholder names with the real profile name.
+                      name: u.name === 'User' ? (profileNameFor(payload.userId) ?? 'User') : u.name,
+                      cursor: { x: payload.x, y: payload.y, tool: payload.tool },
+                    }
                   : u,
               )
             : [
                 ...s.users,
                 {
                   id: String(payload.id),
-                  name: 'User',
+                  name: profileNameFor(payload.userId) ?? 'User',
                   color: remoteColor(s.users.length),
                   cursor: { x: payload.x, y: payload.y, tool: payload.tool },
                   isLocal: false,

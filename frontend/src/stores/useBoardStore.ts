@@ -77,11 +77,15 @@ export const useBoardStore = create<BoardState>((set, get) => {
     });
   };
 
-  const saveDebounced = debounce(() => {
-    const { board } = get();
+  const saveDebounced = debounce((boardId: string) => {
+    const { board, isDemo } = get();
     if (!board) return;
+    if (isDemo) return; // preview boards are never persisted
+    if (board.id !== boardId) return; // board switched while debouncing — stale flush
     set({ saveStatus: { state: 'saving' } });
-    elementApi.saveElements(board.id, board.elements).then((res) => {
+    elementApi.saveElements(boardId, board.elements).then((res) => {
+      const stillCurrent = get().board?.id === boardId;
+      if (!stillCurrent) return;
       set({
         saveStatus: res.ok
           ? { state: 'saved' }
@@ -495,7 +499,9 @@ export const useBoardStore = create<BoardState>((set, get) => {
 
     save: (force = false) => {
       void force;
-      saveDebounced();
+      const { board } = get();
+      if (!board) return;
+      saveDebounced(board.id);
     },
   };
 });
