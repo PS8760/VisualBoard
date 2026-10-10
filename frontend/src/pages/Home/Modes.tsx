@@ -40,14 +40,20 @@ export default function Modes() {
     <Section id="product" className="border-t border-line bg-paper-2/40">
       <Container>
         <div className="grid gap-12 lg:grid-cols-[380px_1fr] lg:gap-16">
-          <div className="lg:sticky lg:top-24 lg:self-start">
+          <div className="lg:sticky lg:top-24 lg:self-start" data-reveal>
             <SectionHeading
               eyebrow="Three modes"
               title="One canvas. Three ways to stay organised."
               description="VisualBoard is a plain canvas until you need structure — then it becomes a layout engine, an architecture reviewer, and a documentation shelf at once."
             />
 
-            <div className="mt-10 flex flex-col gap-1.5" role="tablist" aria-label="VisualBoard modes">
+            <div
+              className="mt-10 flex flex-col gap-1.5"
+              role="tablist"
+              aria-label="VisualBoard modes"
+              data-reveal
+              data-reveal-delay="0.1"
+            >
               {MODES.map((mode) => {
                 const isActive = active === mode.id;
                 return (
@@ -110,7 +116,7 @@ export default function Modes() {
             </div>
           </div>
 
-          <div className="min-h-[380px]" role="tabpanel">
+          <div className="min-h-[380px]" role="tabpanel" data-reveal data-reveal-delay="0.16">
             <AnimatePresence mode="wait">
               <motion.div
                 key={active}

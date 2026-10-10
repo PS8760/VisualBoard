@@ -1,7 +1,20 @@
 import prisma from '../../config/prisma.js';
-import { notFoundError } from '../../utils/errors.js';
+import { notFoundError, badRequestError } from '../../utils/errors.js';
 
 type SnapshotElement = { id: string; [key: string]: unknown };
+
+/**
+ * Old rows stored snapshots as `{ elements: [...] }` instead of a bare array.
+ * Restore must understand both shapes — treating the object as "no snapshot"
+ * used to wipe the whole board on restore.
+ */
+function normalizeSnapshot(raw: unknown): SnapshotElement[] {
+  if (Array.isArray(raw)) return raw as SnapshotElement[];
+  if (raw && typeof raw === 'object' && Array.isArray((raw as { elements?: unknown }).elements)) {
+    return (raw as { elements: SnapshotElement[] }).elements;
+  }
+  return [];
+}
 
 /** Builds a consistent snapshot from the current board elements. */
 export const buildSnapshot = async (boardId: number): Promise<SnapshotElement[]> => {
@@ -50,7 +63,15 @@ export const restoreVersion = async (id: number, restoredBy: number) => {
   if (!version) throw notFoundError('Version not found');
 
   const boardId = version.board_id;
-  const snapshot = Array.isArray(version.snapshot) ? (version.snapshot as SnapshotElement[]) : [];
+  const snapshot = normalizeSnapshot(version.snapshot);
+
+  // Never let an empty/unreadable snapshot destroy existing board content.
+  if (snapshot.length === 0) {
+    const count = await prisma.elements.count({ where: { board_id: boardId } });
+    if (count > 0) {
+      throw badRequestError('This snapshot contains no restorable elements — restore cancelled to protect the board');
+    }
+  }
 
   return prisma.$transaction(async (tx) => {
     const current = await tx.elements.findMany({ where: { board_id: boardId } });

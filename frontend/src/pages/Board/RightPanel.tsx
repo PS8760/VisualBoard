@@ -12,6 +12,7 @@ import { useUIStore } from '../../stores/useUIStore';
 import { useSuggestionStore } from '../../stores/useSuggestionStore';
 import { fetchBoardSuggestions, type AiSuggestion } from '../../api/suggestions.api';
 import { SUGGESTION_META } from '../../utils/shortcuts';
+import { elementId } from '../../services/fabric.elements';
 import type { PanelTab, BoardElement } from '../../types';
 
 const TABS: Array<{ id: PanelTab; label: string; icon: typeof Info }> = [
@@ -152,7 +153,6 @@ function ShapeInspector({ elements, canvas }: ShapeInspectorProps) {
 
   // Find common properties across selected elements
   const firstEl = elements[0];
-  const allSameKind = elements.every((e) => e.kind === firstEl.kind);
   const canEditFill = elements.every((e) => ['rect', 'circle', 'sticky', 'document'].includes(e.kind));
   const canEditStroke = elements.every((e) => ['rect', 'circle', 'line', 'arrow', 'pen'].includes(e.kind));
   const canEditStrokeWidth = canEditStroke;
@@ -164,12 +164,12 @@ function ShapeInspector({ elements, canvas }: ShapeInspectorProps) {
   const commonStrokeWidth = canEditStrokeWidth && elements.every((e) => e.strokeWidth === firstEl.strokeWidth) ? firstEl.strokeWidth : 1.5;
   const commonFontSize = canEditFontSize && elements.every((e) => e.fontSize === firstEl.fontSize) ? firstEl.fontSize : 14;
 
-  const handlePropertyChange = (property: keyof BoardElement, value: any) => {
+  const handlePropertyChange = (property: keyof BoardElement, value: string | number) => {
     elements.forEach((el) => {
-      updateElement(el.id, { [property]: value });
+      updateElement(el.id, { [property]: value } as Partial<BoardElement>);
       // Update fabric object immediately for visual feedback
       if (canvas) {
-        const obj = canvas.getObjects().find((o) => (o as any).data?.id === el.id);
+        const obj = canvas.getObjects().find((o) => elementId(o) === el.id);
         if (obj) {
           if (property === 'fill' && 'fill' in obj) obj.set({ fill: value });
           if (property === 'stroke' && 'stroke' in obj) obj.set({ stroke: value });

@@ -51,6 +51,9 @@ export const CANVAS_COLORS = {
   commentFill: '#d9480f',
 };
 
+/** Shown in a freshly created text element until the user types. */
+export const TEXT_PLACEHOLDER = 'Type something…';
+
 export const asVB = (obj: FabricObject): VBObj => obj as VBObj;
 
 export function elementId(obj: FabricObject): string | undefined {
@@ -146,7 +149,7 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
         selectable: false,
         evented: false,
       });
-      const text = new IText(el.content || 'Write a note…', {
+      const text = new IText(el.content ?? 'Write a note…', {
         left: 10,
         top: 10,
         width: el.width - 20,
@@ -215,7 +218,7 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
       return new Rect({ ...shared, width: 1, height: 1, fill: 'transparent', stroke: 'transparent' });
     }
     case 'text':
-      return new IText(el.content || 'Text', {
+      return new IText(el.content ?? TEXT_PLACEHOLDER, {
         ...shared,
         fontSize: el.fontSize ?? 18,
         fontFamily: 'Inter',
@@ -233,7 +236,7 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
         selectable: false,
         evented: false,
       });
-      const text = new IText(el.content || 'document.pdf', {
+      const text = new IText(el.content ?? 'document.pdf', {
         left: 12,
         top: el.height / 2 - 8,
         fontSize: el.fontSize ?? 12,

@@ -77,7 +77,7 @@ export default function Showcase() {
   return (
     <Section id="product-demo" className="border-t border-line bg-ink py-0">
       <div className="bg-ink px-5 py-20 md:px-8 md:py-28">
-        <Container className="max-w-none px-0 md:px-8">
+        <Container className="max-w-none px-0 md:px-8" data-reveal>
           <SectionHeading
             className="[&_h2]:text-paper [&_p]:text-paper/60"
             eyebrow="The workspace"
@@ -86,7 +86,7 @@ export default function Showcase() {
           />
         </Container>
 
-        <div className="mx-auto mt-14 max-w-[1240px] px-5 md:px-8">
+        <div className="mx-auto mt-14 max-w-[1240px] px-5 md:px-8" data-reveal data-reveal-delay="0.12">
           <div ref={wrapRef} className="relative overflow-hidden rounded-xl border border-white/10 bg-paper shadow-lg" style={{ height: H * scale + 76 * scale }}>
             <div
               className="absolute left-0 top-0 origin-top-left"

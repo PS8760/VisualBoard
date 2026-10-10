@@ -1,16 +1,86 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FileText, X, Download, Eye, Loader2 } from 'lucide-react';
+import { FileText, FileQuestion, X, Download, Eye, Loader2, AlertCircle } from 'lucide-react';
 import { useUIStore } from '../../stores/useUIStore';
-import { downloadAttachment } from '../../api/document.api';
+import { downloadAttachment, fetchAttachmentBlob } from '../../api/document.api';
 import { formatFileSize, timeAgo } from '../../utils';
 import { toast } from 'sonner';
+
+type PreviewKind = 'image' | 'pdf' | 'video' | 'audio' | 'text' | 'other';
+
+type PreviewState =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ready'; kind: PreviewKind; url?: string; text?: string };
+
+function classify(mime: string): PreviewKind | null {
+  if (mime.startsWith('image/')) return 'image';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') return 'text';
+  return null;
+}
 
 export default function DocumentPreview() {
   const doc = useUIStore((s) => s.documentPreview);
   const setPreview = useUIStore((s) => s.setDocumentPreview);
   const setRightPanelTab = useUIStore((s) => s.setRightPanelTab);
   const [downloading, setDownloading] = useState(false);
+  const [preview, setPreviewState] = useState<PreviewState | null>(null);
+  const [previewForId, setPreviewForId] = useState<string | null>(null);
+
+  // Reset to loading when a different document opens. Done as a render-phase
+  // adjustment so the fetch effect never sets state synchronously. Compare
+  // normalized ids (null, never undefined) so the adjustment converges.
+  const docId = doc?.id ?? null;
+  if (docId !== previewForId) {
+    setPreviewForId(docId);
+    setPreviewState(doc ? { status: 'loading' } : null);
+  }
+
+  useEffect(() => {
+    if (!doc) return;
+
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    void (async () => {
+      const res = await fetchAttachmentBlob(doc);
+      if (cancelled) return;
+      if (!res.ok) {
+        setPreviewState({ status: 'error', message: res.message });
+        return;
+      }
+
+      const mime = (res.blob.type || doc.type || '').toLowerCase();
+      const kind = classify(mime);
+
+      try {
+        if (kind === 'text') {
+          const text = await res.blob.text();
+          if (cancelled) return;
+          setPreviewState({ status: 'ready', kind, text: text.slice(0, 100_000) });
+        } else if (kind) {
+          objectUrl = URL.createObjectURL(res.blob);
+          if (cancelled) {
+            URL.revokeObjectURL(objectUrl);
+            return;
+          }
+          setPreviewState({ status: 'ready', kind, url: objectUrl });
+        } else {
+          setPreviewState({ status: 'ready', kind: 'other' });
+        }
+      } catch {
+        if (!cancelled) setPreviewState({ status: 'error', message: 'Could not read this file' });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [doc]);
 
   const handleDownload = async () => {
     if (!doc || downloading) return;
@@ -24,6 +94,67 @@ export default function DocumentPreview() {
       }
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const renderBody = () => {
+    if (!preview || preview.status === 'loading') {
+      return (
+        <div className="flex h-56 flex-col items-center justify-center gap-3 text-ink-3">
+          <Loader2 size={20} className="animate-spin text-ink-2" />
+          <p className="font-mono text-[11px]">Loading preview…</p>
+        </div>
+      );
+    }
+    if (preview.status === 'error') {
+      return (
+        <div className="flex h-56 flex-col items-center justify-center gap-2 text-center">
+          <AlertCircle size={20} className="text-danger" />
+          <p className="max-w-xs text-[12px] text-ink-2">{preview.message}</p>
+        </div>
+      );
+    }
+
+    switch (preview.kind) {
+      case 'image':
+        return (
+          <img
+            src={preview.url}
+            alt={doc?.name ?? 'Attached image'}
+            className="mx-auto max-h-[55vh] w-auto max-w-full object-contain"
+          />
+        );
+      case 'pdf':
+        return (
+          <iframe
+            src={preview.url}
+            title={doc?.name ?? 'PDF preview'}
+            className="h-[55vh] w-full border-0"
+          />
+        );
+      case 'video':
+        return <video src={preview.url} controls className="mx-auto max-h-[55vh] w-full" />;
+      case 'audio':
+        return (
+          <div className="flex h-32 items-center justify-center">
+            <audio src={preview.url} controls className="w-full" />
+          </div>
+        );
+      case 'text':
+        return (
+          <pre className="max-h-[55vh] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[11px] leading-relaxed text-ink-2">
+            {preview.text}
+          </pre>
+        );
+      default:
+        return (
+          <div className="flex h-48 flex-col items-center justify-center gap-2 text-center">
+            <FileQuestion size={22} className="text-ink-3" />
+            <p className="max-w-xs text-[12px] text-ink-2">
+              No inline preview for this file type — download it to open it.
+            </p>
+          </div>
+        );
     }
   };
 
@@ -66,25 +197,8 @@ export default function DocumentPreview() {
             </div>
 
             <div className="bg-paper-2/60 px-6 py-5">
-              <div className="rounded-md border border-line bg-paper p-4 shadow-xs">
-                <div className="space-y-2">
-                  <div className="h-2 w-1/3 rounded-full bg-ink/15" />
-                  <div className="h-2 w-1/2 rounded-full bg-ink/10" />
-                  <div className="h-2 w-2/5 rounded-full bg-ink/10" />
-                  <div className="h-2 w-1/4 rounded-full bg-ink/10" />
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <div className="h-2 w-full rounded-full bg-ink/10" />
-                    <div className="h-2 w-3/4 rounded-full bg-ink/10" />
-                    <div className="h-2 w-5/6 rounded-full bg-ink/10" />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="h-2 w-4/5 rounded-full bg-ink/10" />
-                    <div className="h-2 w-full rounded-full bg-ink/10" />
-                    <div className="h-2 w-2/3 rounded-full bg-ink/10" />
-                  </div>
-                </div>
+              <div className="overflow-hidden rounded-md border border-line bg-paper p-4 shadow-xs">
+                {renderBody()}
               </div>
               <p className="mt-3 text-center font-mono text-[10px] text-ink-3">
                 inline preview · attached to the board · {doc.uploadedAt && timeAgo(doc.uploadedAt)}

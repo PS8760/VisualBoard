@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   Canvas as FabricCanvas,
   FabricObject,
@@ -7,6 +7,8 @@ import {
   PencilBrush,
   FabricImage,
   ActiveSelection,
+  IText,
+  Group,
   type TPointerEventInfo,
   type TPointerEvent,
 } from 'fabric';
@@ -26,14 +28,64 @@ import {
   elementKind,
   removeTmpObjects,
   asVB,
-  snapToGrid,
+  TEXT_PLACEHOLDER,
   type DrawingState,
 } from '../../services/fabric.elements';
+import { animateElementIn } from '../../animations/boardAnimations';
 import { uid } from '../../utils';
 import { uploadDocument } from '../../api/document.api';
 import type { BoardElement } from '../../types';
 import { CanvasSkeleton } from '../../components/ui/Skeleton';
 import EmptyBoard from './EmptyBoard';
+
+/** Project-designed cursors — same pointer path as the presence overlay. */
+const CURSOR = {
+  arrow: "url('/cursors/arrow.svg') 5 3, default",
+  arrowAccent: "url('/cursors/arrow-accent.svg') 5 3, pointer",
+  crosshair: "url('/cursors/crosshair.svg') 12 12, crosshair",
+  text: 'text',
+  grab: 'grab',
+  grabbing: 'grabbing',
+} as const;
+
+const SHAPE_TOOLS = new Set([
+  'rect', 'circle', 'triangle', 'ellipse', 'line', 'arrow',
+  'sticky', 'image', 'document', 'comment', 'pen',
+]);
+
+function setCursorsForTool(canvas: FabricCanvas, tool: string) {
+  if (SHAPE_TOOLS.has(tool)) {
+    canvas.defaultCursor = CURSOR.crosshair;
+    canvas.hoverCursor = CURSOR.crosshair;
+    return;
+  }
+  if (tool === 'text') {
+    canvas.defaultCursor = CURSOR.text;
+    canvas.hoverCursor = CURSOR.text;
+    return;
+  }
+  if (tool === 'hand') {
+    canvas.defaultCursor = CURSOR.grab;
+    canvas.hoverCursor = CURSOR.grab;
+    return;
+  }
+  canvas.defaultCursor = CURSOR.arrow;
+  canvas.hoverCursor = CURSOR.arrowAccent;
+}
+
+/** Canvas carrying a ref to the last click position (for image placement). */
+type CanvasWithLastClick = FabricCanvas & {
+  _lastClickRef?: { current: { x: number; y: number } | null };
+};
+
+/** Exits editing on any IText (including sticky-note children) that is open. */
+function exitEditingTexts(canvas: FabricCanvas) {
+  const visit = (obj: FabricObject) => {
+    if (obj instanceof IText && obj.isEditing) obj.exitEditing();
+    if (obj instanceof Group) obj.getObjects().forEach(visit);
+  };
+  canvas.getObjects().forEach(visit);
+}
 
 export default function CanvasStage() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -48,7 +100,24 @@ export default function CanvasStage() {
   const loadedBoardRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastClickRef = useRef<{ x: number; y: number } | null>(null);
-  const [drawingDims, setDrawingDims] = useState<{ x: number; y: number; label: string } | null>(null);
+  const editingRef = useRef<{ text: IText; host: FabricObject } | null>(null);
+  const freshTextIdRef = useRef<string | null>(null);
+  const suppressModifiedRef = useRef(false);
+  const dimsRef = useRef<HTMLDivElement>(null);
+
+  const showDims = (label: string, x: number, y: number) => {
+    const el = dimsRef.current;
+    if (!el) return;
+    if (el.textContent !== label) el.textContent = label;
+    const transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
+    if (el.style.transform !== transform) el.style.transform = transform;
+    if (el.style.display !== 'block') el.style.display = 'block';
+  };
+
+  const hideDims = () => {
+    const el = dimsRef.current;
+    if (el && el.style.display !== 'none') el.style.display = 'none';
+  };
 
   const board = useBoardStore((s) => s.board);
   const revision = useBoardStore((s) => s.revision);
@@ -63,14 +132,17 @@ export default function CanvasStage() {
     const canvas = useCanvasStore.getState().canvas;
     if (!canvas) return;
 
+    const toolChanged = activeToolRef.current !== tool;
+
     // Cancel an in-progress drawing gesture when the tool changes so the
     // temporary object can never leak into another tool's state.
-    if (activeToolRef.current !== tool && drawingRef.current) {
+    if (toolChanged && drawingRef.current) {
       if (drawingRef.current.object) canvas.remove(drawingRef.current.object);
       drawingRef.current = null;
-      setDrawingDims(null);
-      canvas.requestRenderAll();
+      hideDims();
     }
+    // Don't leave a text editor open behind a different tool.
+    if (toolChanged) exitEditingTexts(canvas);
     activeToolRef.current = tool;
 
     const isPen = tool === 'pen';
@@ -83,13 +155,12 @@ export default function CanvasStage() {
       canvas.freeDrawingBrush = brush;
       canvas.selection = false;
       canvas.skipTargetFind = false;
-      canvas.defaultCursor = 'crosshair';
-      canvas.hoverCursor = 'crosshair';
+      canvas.freeDrawingCursor = CURSOR.crosshair;
+      setCursorsForTool(canvas, tool);
     } else if (tool === 'hand') {
       canvas.selection = false;
       canvas.skipTargetFind = true;
-      canvas.defaultCursor = 'grab';
-      canvas.hoverCursor = 'grab';
+      setCursorsForTool(canvas, tool);
       if (canvas.getActiveObjects().length) {
         canvas.discardActiveObject();
         useBoardStore.getState().clearSelection();
@@ -98,22 +169,7 @@ export default function CanvasStage() {
     } else {
       canvas.selection = tool === 'select';
       canvas.skipTargetFind = false;
-      const cursorMap: Record<string, string> = {
-        select: 'default',
-        rect: 'crosshair',
-        circle: 'crosshair',
-        triangle: 'crosshair',
-        ellipse: 'crosshair',
-        line: 'crosshair',
-        arrow: 'crosshair',
-        text: 'text',
-        sticky: 'crosshair',
-        image: 'crosshair',
-        document: 'crosshair',
-        comment: 'crosshair',
-      };
-      canvas.defaultCursor = cursorMap[tool] || 'default';
-      canvas.hoverCursor = tool === 'select' ? 'move' : canvas.defaultCursor;
+      setCursorsForTool(canvas, tool);
       // Only discard selection when switching to a non-select tool
       if (tool !== 'select' && canvas.getActiveObjects().length) {
         canvas.discardActiveObject();
@@ -160,14 +216,28 @@ export default function CanvasStage() {
       // Read the current tool live — never a stale render-time value.
       const activeTool = useToolStore.getState().tool;
 
+      // Clicks outside the host being edited end text editing first
+      // (sticky children are never the active object, so fabric won't do it).
+      const editing = editingRef.current;
+      if (editing && editing.text.isEditing) {
+        const sameHost = opt.target === editing.host || opt.target === editing.text;
+        if (sameHost) {
+          const ta = (editing.text as unknown as { hiddenTextarea?: HTMLTextAreaElement | null })
+            .hiddenTextarea;
+          ta?.focus();
+        } else {
+          editing.text.exitEditing();
+        }
+      }
+
       // Store last click position for image placement
       lastClickRef.current = { x: pointer.x, y: pointer.y };
 
       if (shouldPan(e)) {
         panningRef.current = { lastX: e.clientX, lastY: e.clientY };
         canvas.selection = false;
-        canvas.defaultCursor = 'grabbing';
-        canvas.hoverCursor = 'grabbing';
+        canvas.defaultCursor = CURSOR.grabbing;
+        canvas.hoverCursor = CURSOR.grabbing;
         if (canvas.getActiveObject()) {
           canvas.discardActiveObject();
           useBoardStore.getState().clearSelection();
@@ -199,6 +269,7 @@ export default function CanvasStage() {
         const obj = materializeElement(el);
         canvas.add(obj);
         objectMapRef.current.set(el.id, obj);
+        animateElementIn(obj);
         useBoardStore.getState().addElement(el);
         toast.info('Drop a file onto the card to attach it');
         useToolStore.getState().setTool('select');
@@ -213,7 +284,7 @@ export default function CanvasStage() {
         const hit = findObjectAt(canvas, pointer.x, pointer.y);
         if (!hit) {
           selectionOriginRef.current = { x: pointer.x, y: pointer.y };
-          const rect = new (Rect as any)({
+          const rect = new Rect({
             left: pointer.x,
             top: pointer.y,
             width: 0,
@@ -250,7 +321,7 @@ export default function CanvasStage() {
           stroke: 'transparent',
           strokeWidth: 0,
           fontSize: 18,
-          content: 'Type something…',
+          content: TEXT_PLACEHOLDER,
           version: 1,
         };
         const obj = materializeElement(el);
@@ -258,8 +329,14 @@ export default function CanvasStage() {
         objectMapRef.current.set(el.id, obj);
         canvas.setActiveObject(obj);
         canvas.requestRenderAll();
-        (canvas as unknown as { enterEditing: (o: unknown) => void }).enterEditing(obj);
+        // Register before entering editing so history captures the
+        // placeholder state as the undo point for this new element.
         useBoardStore.getState().addElement(el);
+        freshTextIdRef.current = el.id;
+        if (obj instanceof IText) {
+          obj.enterEditing();
+          obj.selectAll();
+        }
         useToolStore.getState().setTool('select');
       } else if (drawing.type === 'comment' && drawing.object) {
         const el = endDrawing(canvas, drawing, pointer);
@@ -291,7 +368,7 @@ export default function CanvasStage() {
         const origY = selectionOriginRef.current.y;
         const curX = opt.scenePoint?.x ?? opt.viewportPoint.x;
         const curY = opt.scenePoint?.y ?? opt.viewportPoint.y;
-        const box = selectionBoxRef.current as any;
+        const box = selectionBoxRef.current;
         box.set({
           left: Math.min(origX, curX),
           top: Math.min(origY, curY),
@@ -306,36 +383,34 @@ export default function CanvasStage() {
           shift: shiftDownRef.current,
           snapGrid: gridVisible,
         });
-        // Show dimension tooltip near cursor
+        // Dimension chip follows the cursor via direct DOM writes so
+        // mousemove never triggers a React re-render.
         if (dims.label) {
           const e = opt.e as MouseEvent;
           const rect = host.getBoundingClientRect();
-          setDrawingDims({
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top - 30,
-            label: dims.label,
-          });
+          showDims(dims.label, e.clientX - rect.left, e.clientY - rect.top - 30);
+        } else {
+          hideDims();
         }
       } else {
-        setDrawingDims(null);
+        hideDims();
       }
       broadcastCursor(opt);
     };
 
     const onMouseUp = (opt: TPointerEventInfo<TPointerEvent>) => {
-      setDrawingDims(null);
+      hideDims();
       const activeTool = useToolStore.getState().tool;
       if (panningRef.current) {
         panningRef.current = null;
         canvas.selection = activeTool === 'select';
         canvas.skipTargetFind = activeTool === 'hand';
-        canvas.defaultCursor = activeTool === 'hand' ? 'grab' : 'default';
-        canvas.hoverCursor = activeTool === 'hand' ? 'grab' : (activeTool === 'select' ? 'move' : 'default');
+        setCursorsForTool(canvas, activeTool);
         canvas.requestRenderAll();
         return;
       }
       if (selectionBoxRef.current) {
-        const box = selectionBoxRef.current as any;
+        const box = selectionBoxRef.current;
         const bounds = box.getBoundingRect();
         canvas.remove(box);
         selectionBoxRef.current = null;
@@ -389,6 +464,7 @@ export default function CanvasStage() {
           const finalObj = materializeElement(el);
           canvas.add(finalObj);
           objectMapRef.current.set(el.id, finalObj);
+          animateElementIn(finalObj);
           canvas.setActiveObject(finalObj);
           canvas.requestRenderAll();
 
@@ -415,6 +491,7 @@ export default function CanvasStage() {
       canvas.remove(opt.path);
       canvas.add(obj);
       objectMapRef.current.set(el.id, obj);
+      animateElementIn(obj);
       useBoardStore.getState().addElement(el);
     };
 
@@ -424,6 +501,12 @@ export default function CanvasStage() {
     };
 
     const onObjectModified = () => {
+      // Exiting text editing fires a synthetic object:modified — the
+      // pre-edit history point was already captured on editing:entered.
+      if (suppressModifiedRef.current) {
+        suppressModifiedRef.current = false;
+        return;
+      }
       const active = canvas.getActiveObjects();
       if (!active.length) return;
       const { updateElement, commitHistory } = useBoardStore.getState();
@@ -438,12 +521,59 @@ export default function CanvasStage() {
       });
     };
 
+    const onTextEditingEntered = (opt: { target?: FabricObject }) => {
+      const target = opt.target;
+      if (!(target instanceof IText)) return;
+      editingRef.current = { text: target, host: (target.group ?? target) as FabricObject };
+      // Snapshot the pre-typing state so the first undo restores it.
+      useBoardStore.getState().commitHistory();
+    };
+
+    const onTextEditingExited = (opt: { target?: FabricObject }) => {
+      const target = opt.target;
+      if (!(target instanceof IText)) return;
+      if (editingRef.current?.text === target) editingRef.current = null;
+      // Fabric fires object:modified right after this event — swallow its
+      // duplicate history commit for one microtask.
+      suppressModifiedRef.current = true;
+      queueMicrotask(() => {
+        suppressModifiedRef.current = false;
+      });
+
+      const host = (target.group ?? target) as FabricObject;
+      const id = elementId(host);
+      const content = target.text ?? '';
+      const wasFresh = freshTextIdRef.current === id;
+      freshTextIdRef.current = null;
+      if (!id) return;
+
+      // A brand-new text element the user never typed into is just clutter.
+      if (wasFresh && (!content.trim() || content === TEXT_PLACEHOLDER)) {
+        useBoardStore.getState().removeElements([id]);
+        return;
+      }
+
+      const el = serializeElement(host);
+      if (el) {
+        useBoardStore.getState().updateElement(id, { content, width: el.width, height: el.height });
+      }
+    };
+
+    const onTextChanged = (opt: { target?: FabricObject }) => {
+      // Sticky text lives on a child IText without its own id — sync via the group.
+      const target = opt.target ?? canvas.getActiveObject();
+      if (!target) return;
+      const host = (target.group ?? target) as FabricObject;
+      const el = serializeElement(host);
+      const id = elementId(host);
+      if (el && id) useBoardStore.getState().updateElement(id, { content: el.content });
+    };
+
     const onKeyUp = (e: KeyboardEvent) => {
       const currentTool = useToolStore.getState().tool;
       if (e.code === 'Space') {
         spaceDownRef.current = false;
-        canvas.defaultCursor = currentTool === 'hand' ? 'grab' : 'default';
-        canvas.hoverCursor = currentTool === 'hand' ? 'grab' : (currentTool === 'select' ? 'move' : 'default');
+        setCursorsForTool(canvas, currentTool);
         canvas.requestRenderAll();
       }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftDownRef.current = false;
@@ -451,8 +581,8 @@ export default function CanvasStage() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement)?.isContentEditable)) {
         spaceDownRef.current = true;
-        canvas.defaultCursor = 'grab';
-        canvas.hoverCursor = 'grab';
+        canvas.defaultCursor = CURSOR.grab;
+        canvas.hoverCursor = CURSOR.grab;
         canvas.requestRenderAll();
       }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftDownRef.current = true;
@@ -462,23 +592,31 @@ export default function CanvasStage() {
       const target = opt.target;
       if (!target) return;
 
-      // Double-click on IText to edit
+      // Plain text: fabric already entered editing on the 2nd click —
+      // only enter when it somehow didn't, and refocus the hidden input
+      // when it did.
       if (target instanceof IText) {
-        canvas.setActiveObject(target);
-        (canvas as unknown as { enterEditing: (o: unknown) => void }).enterEditing(target);
+        if (!target.isEditing) {
+          canvas.setActiveObject(target);
+          target.enterEditing();
+          target.selectAll();
+        } else {
+          const ta = (target as unknown as { hiddenTextarea?: HTMLTextAreaElement | null })
+            .hiddenTextarea;
+          ta?.focus();
+        }
         return;
       }
 
-      // Double-click on sticky Group to edit the text child
-      if (target instanceof Group) {
-        const textObj = target.getObjects().find((o) => o instanceof IText) as IText | undefined;
-        if (textObj) {
-          canvas.setActiveObject(target);
-          canvas.requestRenderAll();
-          // Enable text editing by making it temporarily selectable
-          textObj.set({ selectable: true, evented: true, editable: true });
-          (canvas as unknown as { enterEditing: (o: unknown) => void }).enterEditing(textObj);
-        }
+      // Sticky note: the child IText is not evented — edit it via the group.
+      if (target instanceof Group && elementKind(target) === 'sticky') {
+        const textObj = target.getObjects().find((o): o is IText => o instanceof IText);
+        if (!textObj) return;
+        textObj.set({ editable: true });
+        canvas.setActiveObject(target);
+        canvas.requestRenderAll();
+        textObj.enterEditing();
+        textObj.selectAll();
       }
     };
 
@@ -532,6 +670,7 @@ export default function CanvasStage() {
           const obj = materializeElement(el);
           canvas.add(obj);
           objectMapRef.current.set(el.id, obj);
+          animateElementIn(obj);
           useBoardStore.getState().addElement(el);
           toast.success(`${file.name} added to the board`);
         }
@@ -550,13 +689,9 @@ export default function CanvasStage() {
     canvas.on('selection:updated', onSelection);
     canvas.on('selection:cleared', () => useBoardStore.getState().select([]));
     canvas.on('object:modified', onObjectModified);
-    canvas.on('text:changed', () => {
-      const active = canvas.getActiveObject();
-      if (!active) return;
-      const el = serializeElement(active);
-      const id = elementId(active);
-      if (el && id) useBoardStore.getState().updateElement(id, { content: el.content });
-    });
+    canvas.on('text:changed', onTextChanged);
+    canvas.on('text:editing:entered', onTextEditingEntered);
+    canvas.on('text:editing:exited', onTextEditingExited);
 
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -574,7 +709,9 @@ export default function CanvasStage() {
       canvas.off('selection:updated', onSelection);
       canvas.off('selection:cleared');
       canvas.off('object:modified', onObjectModified);
-      canvas.off('text:changed');
+      canvas.off('text:changed', onTextChanged);
+      canvas.off('text:editing:entered', onTextEditingEntered);
+      canvas.off('text:editing:exited', onTextEditingExited);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       host.removeEventListener('dragover', onDragOver);
@@ -599,7 +736,7 @@ export default function CanvasStage() {
     });
 
     // Store lastClickRef on canvas for image placement
-    (canvas as any)._lastClickRef = lastClickRef;
+    (canvas as CanvasWithLastClick)._lastClickRef = lastClickRef;
 
     canvas.setViewportTransform([1, 0, 0, 1, host.clientWidth / 2, host.clientHeight / 2]);
 
@@ -668,15 +805,13 @@ export default function CanvasStage() {
       )}
       <div ref={canvasHostRef} className="absolute inset-0 z-10" />
 
-      {/* Drawing dimension tooltip */}
-      {drawingDims && (
-        <div
-          className="pointer-events-none absolute z-20 rounded-md bg-ink px-2 py-1 font-mono text-[11px] font-medium text-paper shadow-lg"
-          style={{ left: drawingDims.x, top: drawingDims.y }}
-        >
-          {drawingDims.label}
-        </div>
-      )}
+      {/* Drawing dimension chip — position/text written directly by mousemove */}
+      <div
+        ref={dimsRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 top-0 z-20 hidden rounded-md bg-ink px-2 py-1 font-mono text-[11px] font-medium text-paper shadow-lg"
+        style={{ display: 'none' }}
+      />
 
       <input
         ref={fileInputRef}
@@ -709,7 +844,7 @@ async function onImagePicked(e: React.ChangeEvent<HTMLInputElement>) {
     const scale = Math.min(1, maxW / img.width);
 
     // Use last click position if available, otherwise center
-    const lastClick = (canvas as any)._lastClickRef?.current;
+    const lastClick = (canvas as CanvasWithLastClick)._lastClickRef?.current;
     const x = lastClick?.x ?? (container?.clientWidth ?? 0) / 2;
     const y = lastClick?.y ?? (container?.clientHeight ?? 0) / 2;
 
@@ -736,6 +871,7 @@ async function onImagePicked(e: React.ChangeEvent<HTMLInputElement>) {
     });
     asVB(img).data = { id: el.id, kind: 'image' };
     canvas.add(img);
+    animateElementIn(img);
     useBoardStore.getState().addElement(el);
     useToolStore.getState().setTool('select');
     toast.success(`${file.name} added to the board`);

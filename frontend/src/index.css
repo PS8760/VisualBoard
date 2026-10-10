@@ -1,5 +1,50 @@
 @import "tailwindcss";
 
+/* ─── Custom app cursor ─────────────────────────────────────────────────────
+   The project-designed pointer (same path as the presence cursors) mapped to
+   the OS cursor. These rules are intentionally unlayered so they win over
+   Tailwind's cursor-* utilities. Safari ignores SVG cursors, so every rule
+   keeps a sensible fallback keyword. */
+html {
+  cursor: url('/cursors/arrow.svg') 5 3, default;
+}
+a[href],
+button:not(:disabled),
+[role='button'],
+[role='link'],
+select,
+summary,
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'],
+input[type='color'],
+.cursor-pointer {
+  cursor: url('/cursors/arrow-accent.svg') 5 3, pointer;
+}
+button:disabled,
+[aria-disabled='true'],
+.cursor-not-allowed {
+  cursor: not-allowed;
+}
+input:not([type='range']):not([type='color']):not([type='checkbox']):not([type='radio']),
+textarea,
+[contenteditable='true'],
+.cursor-text {
+  cursor: text;
+}
+.cursor-crosshair {
+  cursor: url('/cursors/crosshair.svg') 12 12, crosshair;
+}
+.cursor-grab {
+  cursor: grab;
+}
+.cursor-grabbing {
+  cursor: grabbing;
+}
+.cursor-default {
+  cursor: url('/cursors/arrow.svg') 5 3, default;
+}
+
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -112,10 +157,6 @@
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
     border-radius: 4px;
-  }
-
-  button {
-    cursor: pointer;
   }
 
   /* Custom scrollbar — adapts via CSS variables */

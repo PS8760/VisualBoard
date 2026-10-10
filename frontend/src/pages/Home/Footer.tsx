@@ -23,7 +23,7 @@ export default function Footer() {
     <footer className="border-t border-line bg-paper-2/40">
       <Container className="py-14">
         <div className="flex flex-col gap-10 md:flex-row md:items-start md:justify-between">
-          <div className="max-w-xs">
+          <div className="max-w-xs" data-reveal>
             <Link to="/" aria-label="VisualBoard home">
               <Logo />
             </Link>
@@ -53,7 +53,7 @@ export default function Footer() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-10 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-10 sm:grid-cols-3" data-reveal data-reveal-delay="0.1">
             {COLUMNS.map((col) => (
               <div key={col.title}>
                 <p className="mono-label mb-3.5 text-ink-3">{col.title}</p>
@@ -75,7 +75,11 @@ export default function Footer() {
           </div>
         </div>
 
-        <div className="mt-12 flex flex-col items-start justify-between gap-3 border-t border-line pt-6 sm:flex-row sm:items-center">
+        <div
+          className="mt-12 flex flex-col items-start justify-between gap-3 border-t border-line pt-6 sm:flex-row sm:items-center"
+          data-reveal
+          data-reveal-delay="0.15"
+        >
           <p className="font-mono text-[11px] text-ink-3">
             Built for ideas that don&rsquo;t fit in a box.
           </p>

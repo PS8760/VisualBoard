@@ -73,6 +73,30 @@ export function animateConnectorDraw(object: FabricObject, duration = 0.7) {
   return gsap.to(object, { opacity: 1, duration, ease: 'power1.out' });
 }
 
+/** Gentle pop-in for a freshly created element. */
+export function animateElementIn(object: FabricObject) {
+  if (REDUCED) return;
+  const targetOpacity = object.opacity ?? 1;
+  const targetScaleX = object.scaleX ?? 1;
+  const targetScaleY = object.scaleY ?? 1;
+  gsap.fromTo(
+    object,
+    { opacity: 0, scaleX: targetScaleX * 0.9, scaleY: targetScaleY * 0.9 },
+    {
+      opacity: targetOpacity,
+      scaleX: targetScaleX,
+      scaleY: targetScaleY,
+      duration: 0.26,
+      ease: 'back.out(1.7)',
+      onUpdate: () => object.canvas?.requestRenderAll(),
+      onComplete: () => {
+        object.setCoords();
+        object.canvas?.requestRenderAll();
+      },
+    },
+  );
+}
+
 /** Subtle pulse for the completion indicator after arranging. */
 export function completionPulse(element: HTMLElement | null) {
   if (!element) return () => {};

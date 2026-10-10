@@ -1,5 +1,5 @@
 import prisma from '../../config/prisma.js';
-import { notFoundError } from '../../utils/errors.js';
+import { notFoundError, badRequestError } from '../../utils/errors.js';
 
 export const createElement = async (boardId: number, elementData: Record<string, unknown>, id: string) => {
   const payload = { ...elementData, id } as object;
@@ -64,6 +64,13 @@ export const bulkSyncElements = async (
 
     const existing = await tx.elements.findMany({ where: { board_id: boardId } });
     const existingIds = new Set(existing.map((e) => e.id));
+
+    // bulkSync is a full replace: an empty payload would delete everything.
+    // Refuse while the board still has content so a stale client (old tab,
+    // missed realtime events) can never wipe the board in a single call.
+    if (elements.length === 0 && existing.length > 0) {
+      throw badRequestError('Refusing to clear all elements in a single bulk sync');
+    }
 
     const toDelete = existing.filter((e) => !ids.includes(e.id));
     if (toDelete.length) {

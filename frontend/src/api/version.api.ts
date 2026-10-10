@@ -4,15 +4,25 @@ import type { BoardVersion } from '../types';
 interface BackendVersion {
   id: number;
   board_id: number;
-  snapshot: Array<Record<string, unknown>> | null;
+  // Historically stored either as a bare array or as `{ elements: [...] }`.
+  snapshot: unknown;
   created_by: number;
   created_at: string;
   users?: { id: number; name: string } | null;
 }
 
+function snapshotElements(raw: BackendVersion): Array<Record<string, unknown>> {
+  const s = raw.snapshot;
+  if (Array.isArray(s)) return s as Array<Record<string, unknown>>;
+  if (s && typeof s === 'object' && Array.isArray((s as { elements?: unknown }).elements)) {
+    return (s as { elements: Array<Record<string, unknown>> }).elements;
+  }
+  return [];
+}
+
 function mapVersion(raw: BackendVersion): BoardVersion {
   const name = raw.users?.name ?? `User #${raw.created_by}`;
-  const snapshot = Array.isArray(raw.snapshot) ? raw.snapshot : [];
+  const snapshot = snapshotElements(raw);
   return {
     id: String(raw.id),
     label: `Snapshot ${raw.id}`,
@@ -26,7 +36,8 @@ function mapVersion(raw: BackendVersion): BoardVersion {
 export async function fetchVersions(boardId: string): Promise<BoardVersion[]> {
   try {
     const { data } = await client.get<{ data?: BackendVersion[] }>(`/boards/${boardId}/versions`);
-    return (data?.data ?? []).map(mapVersion);
+    // Hide empty/broken snapshots — restoring one used to wipe the board.
+    return (data?.data ?? []).map(mapVersion).filter((v) => v.elementCount > 0);
   } catch {
     return [];
   }

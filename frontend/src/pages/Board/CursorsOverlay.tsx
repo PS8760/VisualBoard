@@ -1,6 +1,10 @@
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useCanvasStore } from '../../stores/useCanvasStore';
 import { usePresenceStore } from '../../stores/usePresenceStore';
+
+/** Hide a cursor after this long without a cursor:update. */
+const STALE_MS = 5_000;
 
 /**
  * Renders remote (and own) cursors on top of the canvas.
@@ -10,6 +14,15 @@ export default function CursorsOverlay() {
   const users = usePresenceStore((s) => s.users);
   const viewport = useCanvasStore((s) => s.viewport);
   const container = useCanvasStore((s) => s.container);
+
+  // Staleness is time-based, so tick a clock in state periodically — reading
+  // Date.now() during render is impure, and without a tick an idle
+  // collaborator's arrow would never be re-evaluated for hiding.
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 2_000);
+    return () => window.clearInterval(t);
+  }, []);
 
   if (!container || !users.length) return null;
 
@@ -25,7 +38,11 @@ export default function CursorsOverlay() {
     <div className="pointer-events-none absolute inset-0 z-20" aria-hidden="true">
       {users.map((u) => {
         if (!u.cursor) return null;
-        const pos = screen(u.cursor.x, u.cursor.y);
+        if (!u.lastSeen || now - u.lastSeen > STALE_MS) return null;
+        const raw = screen(u.cursor.x, u.cursor.y);
+        // Align the designed pointer's tip (5.5, 3.2 of a 24 box rendered at
+        // 17px) with the actual world point instead of its top-left corner.
+        const pos = { x: raw.x - (5.5 / 24) * 17, y: raw.y - (3.2 / 24) * 17 };
         const offscreen =
           pos.x < -40 || pos.y < -40 || pos.x > width + 40 || pos.y > height + 40;
         if (offscreen) return null;

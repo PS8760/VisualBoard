@@ -9,6 +9,7 @@ interface UIState {
   documentPreview: { id: string; name: string; type: string; size: number; uploadedAt: string; url?: string } | null;
   activeComment: { elementId: string; x: number; y: number } | null;
   arrangeComplete: boolean;
+  arrangeAnalyzing: boolean;
   shortcutTooltip: string | null;
 
   toggleRightPanel: () => void;
@@ -19,6 +20,7 @@ interface UIState {
   setDocumentPreview: (doc: UIState['documentPreview']) => void;
   setActiveComment: (c: UIState['activeComment']) => void;
   setArrangeComplete: (v: boolean) => void;
+  setArrangeAnalyzing: (v: boolean) => void;
   setShortcutTooltip: (s: string | null) => void;
 }
 
@@ -30,6 +32,7 @@ export const useUIStore = create<UIState>((set) => ({
   documentPreview: null,
   activeComment: null,
   arrangeComplete: false,
+  arrangeAnalyzing: false,
   shortcutTooltip: null,
 
   toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
@@ -40,5 +43,6 @@ export const useUIStore = create<UIState>((set) => ({
   setDocumentPreview: (documentPreview) => set({ documentPreview }),
   setActiveComment: (activeComment) => set({ activeComment }),
   setArrangeComplete: (arrangeComplete) => set({ arrangeComplete }),
+  setArrangeAnalyzing: (arrangeAnalyzing) => set({ arrangeAnalyzing }),
   setShortcutTooltip: (shortcutTooltip) => set({ shortcutTooltip }),
 }));

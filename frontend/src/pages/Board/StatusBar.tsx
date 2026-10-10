@@ -1,5 +1,5 @@
 import {
-  Wand2, Undo2, Redo2, ZoomIn, ZoomOut, Grid3X3, Plus, CircleDot,
+  Wand2, Undo2, Redo2, ZoomIn, ZoomOut, Grid3X3, Plus, CircleDot, Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Tooltip } from '../../components/ui/Tooltip';
@@ -12,7 +12,13 @@ import { TOOL_LABEL } from '../../utils/shortcuts';
 import { elementId } from '../../services/fabric.elements';
 import { animateArrangement, completionPulse } from '../../animations/boardAnimations';
 import { arrangeBoard } from '../../api/board.api';
+import type { ArrangeTarget } from '../../services/arrange';
 import type { FabricObject } from 'fabric';
+
+/** Minimum visible duration of the "analyzing" phase. */
+const ANALYZE_MIN_MS = 2800;
+/** Backend budget before falling back to the local layout. */
+const ANALYZE_TIMEOUT_MS = 4000;
 
 export default function StatusBar() {
   const board = useBoardStore((s) => s.board);
@@ -21,47 +27,69 @@ export default function StatusBar() {
   const tool = useToolStore((s) => s.tool);
   const viewport = useCanvasStore((s) => s.viewport);
   const gridVisible = useCanvasStore((s) => s.gridVisible);
+  const arrangeAnalyzing = useUIStore((s) => s.arrangeAnalyzing);
 
   const arrange = async () => {
-    const { updateElement } = useBoardStore.getState();
+    const { updateElement, commitHistory } = useBoardStore.getState();
     const canvas = useCanvasStore.getState().canvas;
-    if (!canvas || !board?.elements.length || !board.id) return;
+    const ui = useUIStore.getState();
+    if (!canvas || !board?.elements.length || !board.id || ui.arrangeAnalyzing) return;
 
-    // Call backend arrange API
-    const result = await arrangeBoard(board.id);
-    
-    if (!result.ok || !result.positions) {
-      toast.error('Arrangement failed', { description: result.message ?? 'Could not arrange elements' });
-      return;
+    ui.setArrangeAnalyzing(true);
+    ui.setArrangeComplete(false);
+
+    // Hold the analyzing phase for a few seconds while the backend runs,
+    // bounded by a timeout — layout always resolves via the local fallback.
+    const [result] = await Promise.all([
+      Promise.race([
+        arrangeBoard(board.id),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), ANALYZE_TIMEOUT_MS)),
+      ]),
+      new Promise((resolve) => setTimeout(resolve, ANALYZE_MIN_MS)),
+    ]);
+
+    let targets: ArrangeTarget[];
+    if (result?.ok && result.positions) {
+      targets = Object.entries(result.positions).map(([id, pos]) => ({
+        id,
+        x: pos.x,
+        y: pos.y,
+      }));
+    } else {
+      targets = useBoardStore.getState().arrange();
+      if (result && !result.ok) {
+        toast.info('Arranged locally', {
+          description: result.message ?? 'The server could not arrange this board.',
+        });
+      } else if (!result) {
+        toast.info('Arranged locally', {
+          description: 'The server took too long — used the local layout.',
+        });
+      }
     }
 
-    // Map backend response to targets for animation
-    const targets = Object.entries(result.positions).map(([id, pos]) => ({
-      id,
-      x: pos.x,
-      y: pos.y,
-    }));
+    ui.setArrangeAnalyzing(false);
+    if (!targets.length) return;
 
     const objects = targets
       .map((t) => {
-        const obj = canvas
-          .getObjects()
-          .find((o) => elementId(o) === t.id);
+        const obj = canvas.getObjects().find((o) => elementId(o) === t.id);
         return obj ? { object: obj, ...t } : null;
       })
       .filter(Boolean) as Array<{ object: FabricObject; id: string; x?: number; y?: number; points?: number[] }>;
 
-    useUIStore.getState().setArrangeComplete(false);
     animateArrangement(
       objects,
       () => {
         useUIStore.getState().setArrangeComplete(true);
         targets.forEach((t) => {
-          if (t.x !== undefined && t.y !== undefined) {
-            updateElement(t.id, { x: t.x, y: t.y });
-          }
+          const patch: Partial<{ x: number; y: number; points: number[] }> = {};
+          if (t.x !== undefined) patch.x = t.x;
+          if (t.y !== undefined) patch.y = t.y;
+          if (t.points) patch.points = t.points;
+          if (Object.keys(patch).length) updateElement(t.id, patch);
         });
-        useBoardStore.getState().commitHistory();
+        commitHistory();
         completionPulse(document.getElementById('arrange-badge'));
       },
       (p) => {
@@ -78,17 +106,21 @@ export default function StatusBar() {
           <button
             id="arrange-button"
             onClick={arrange}
-            disabled={!board || !board.elements.length}
+            disabled={!board || !board.elements.length || arrangeAnalyzing}
             className={cn(
               'flex h-7 items-center gap-1.5 rounded-sm px-2.5 text-[11.5px] font-medium transition-colors',
-              !board || !board.elements.length
+              !board || !board.elements.length || arrangeAnalyzing
                 ? 'bg-paper-2 text-ink-3 cursor-not-allowed opacity-60'
                 : 'bg-ink text-paper hover:bg-black',
             )}
             aria-label="Arrange elements"
           >
-            <Wand2 size={12} />
-            Auto Arrange
+            {arrangeAnalyzing ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <Wand2 size={12} />
+            )}
+            {arrangeAnalyzing ? 'Analyzing…' : 'Auto Arrange'}
           </button>
         </Tooltip>
 

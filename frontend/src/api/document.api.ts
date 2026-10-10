@@ -59,3 +59,16 @@ export async function downloadAttachment(attachment: AttachmentMeta): Promise<{ 
     return { ok: false, message: apiErrorMessage(error) };
   }
 }
+
+/** Fetches the file bytes for inline previewing (caller owns the blob). */
+export async function fetchAttachmentBlob(
+  attachment: AttachmentMeta,
+): Promise<{ ok: true; blob: Blob } | { ok: false; message: string }> {
+  if (!attachment.url) return { ok: false, message: 'No download URL is available' };
+  try {
+    const { data } = await client.get<Blob>(attachment.url, { responseType: 'blob' });
+    return { ok: true, blob: data };
+  } catch (error) {
+    return { ok: false, message: apiErrorMessage(error) };
+  }
+}

@@ -30,7 +30,7 @@ export default function Navbar() {
   return (
     <header
       className={cn(
-        'fixed inset-x-0 top-0 z-50 transition-all duration-300',
+        'nav-drop fixed inset-x-0 top-0 z-50 transition-all duration-300',
         scrolled
           ? 'border-b border-line bg-paper/85 backdrop-blur-md shadow-xs'
           : 'border-b border-transparent bg-transparent',
@@ -128,6 +128,14 @@ export default function Navbar() {
           </div>
         </div>
       )}
+
+      <style>{`
+        .nav-drop { opacity: 0; animation: nav-drop 0.5s cubic-bezier(0.22,1,0.36,1) 0.05s forwards; }
+        @keyframes nav-drop { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+        @media (prefers-reduced-motion: reduce) {
+          .nav-drop { opacity: 1 !important; animation: none !important; }
+        }
+      `}</style>
     </header>
   );
 }

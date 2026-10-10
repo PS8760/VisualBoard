@@ -16,6 +16,7 @@ interface PresenceState {
   disconnect: () => void;
   updateLocalCursor: (x: number, y: number, tool: Tool) => void;
   addUser: (user: Omit<PresenceUser, 'isLocal'>) => void;
+  addLocalUser: (user: Omit<PresenceUser, 'isLocal'>) => void;
   removeUser: (id: string) => void;
   setStatus: (status: ConnectionStatus) => void;
   setMode: (mode: PresenceMode) => void;
@@ -67,6 +68,7 @@ function makeSimulatedUsers(): PresenceUser[] {
     name: u.name,
     color: u.color,
     cursor: { x: WAYPOINTS[i % WAYPOINTS.length][0], y: WAYPOINTS[i % WAYPOINTS.length][1], tool: 'select' as Tool },
+    lastSeen: Date.now(),
     isLocal: false,
   }));
 }
@@ -89,7 +91,9 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
     id: String(user.id),
     name: user.name || profileNameFor(user.userId) || 'User',
     color: user.color ?? remoteColor(index),
-    cursor: user.cursor ?? { x: 0, y: 0, tool: 'select' },
+    // board:users payloads carry no cursor — render nothing until the first
+    // cursor:update arrives instead of spawning a phantom arrow at (0,0).
+    ...(user.cursor ? { cursor: user.cursor, lastSeen: Date.now() } : {}),
     isLocal: false,
   });
 
@@ -120,7 +124,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
     simTimer = setInterval(() => {
       set((s) => ({
         users: s.users.map((u) => {
-          if (u.isLocal) return u;
+          if (u.isLocal || !u.cursor) return u;
           const idx = waypointIndex[u.id] ?? 0;
           const target = WAYPOINTS[idx % WAYPOINTS.length];
           const offset = simOffsets[u.id] ?? 0;
@@ -136,6 +140,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
               y: u.cursor.y + dy * 0.06,
               tool: Math.sin(Date.now() / 5000 + offset) > 0.6 ? 'pen' : 'select',
             },
+            lastSeen: Date.now(),
           };
         }),
       }));
@@ -223,6 +228,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
                       // Upgrade placeholder names with the real profile name.
                       name: u.name === 'User' ? (profileNameFor(payload.userId) ?? 'User') : u.name,
                       cursor: { x: payload.x, y: payload.y, tool: payload.tool },
+                      lastSeen: Date.now(),
                     }
                   : u,
               )
@@ -233,6 +239,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
                   name: profileNameFor(payload.userId) ?? 'User',
                   color: remoteColor(s.users.length),
                   cursor: { x: payload.x, y: payload.y, tool: payload.tool },
+                  lastSeen: Date.now(),
                   isLocal: false,
                 },
               ],
@@ -253,7 +260,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
 
     updateLocalCursor: (x, y, tool) => {
       set((s) => ({
-        users: s.users.map((u) => (u.isLocal ? { ...u, cursor: { x, y, tool } } : u)),
+        users: s.users.map((u) => (u.isLocal ? { ...u, cursor: { x, y, tool }, lastSeen: Date.now() } : u)),
       }));
       broadcastCursor(x, y, tool);
     },
@@ -269,9 +276,26 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
               ...rest,
               name,
               color: color ?? PRESENCE_COLORS[(s.users.length + s.users.filter((u) => !u.isLocal).length) % PRESENCE_COLORS.length],
-              cursor: cursor ?? { x: 0, y: 0, tool: 'select' },
+              // Remote arrivals may have no cursor yet — keep it undefined so
+              // the overlay does not paint a phantom arrow at the origin.
+              cursor,
               isLocal: false,
             },
+          ],
+        };
+      }),
+
+    // The board's own presence entry. MUST be isLocal: true — every other
+    // feature keys off it (cursor emission guard, updateLocalCursor, remote
+    // merge filters), and a false flag here silently breaks live cursors for
+    // everyone (nobody broadcasts cursor:update).
+    addLocalUser: (user) =>
+      set((s) => {
+        if (s.users.some((u) => u.isLocal)) return s;
+        return {
+          users: [
+            { ...user, color: user.color ?? PRESENCE_COLORS[0], isLocal: true },
+            ...s.users.filter((u) => u.id !== user.id),
           ],
         };
       }),

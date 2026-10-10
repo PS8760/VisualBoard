@@ -94,44 +94,6 @@ export const useBoardStore = create<BoardState>((set, get) => {
     });
   }, 900);
 
-  const persistElementChange = (sentLive: boolean) => {
-    if (get().isDemo) return;
-    if (sentLive) {
-      set({ saveStatus: { state: 'saving' } });
-      return;
-    }
-    get().save();
-  };
-
-  const markRealtimeSaved = () => {
-    if (!get().isDemo) set({ saveStatus: { state: 'saved' } });
-  };
-
-  const emitSnapshotDiff = (boardId: string, before: BoardElement[], after: BoardElement[]): boolean => {
-    const beforeById = new Map(before.map((el) => [el.id, el]));
-    const afterById = new Map(after.map((el) => [el.id, el]));
-    let sentLive = false;
-
-    before.forEach((el) => {
-      if (!afterById.has(el.id)) {
-        sentLive = emitElementEvent('element:removed', { boardId, id: el.id }) || sentLive;
-      }
-    });
-
-    after.forEach((el) => {
-      const prev = beforeById.get(el.id);
-      if (!prev) {
-        sentLive = emitElementEvent('element:created', { boardId, element: el }) || sentLive;
-        return;
-      }
-      if (JSON.stringify(prev) !== JSON.stringify(el)) {
-        sentLive = emitElementEvent('element:updated', { boardId, id: el.id, patch: el }) || sentLive;
-      }
-    });
-
-    return sentLive;
-  };
-
   return {
     board: null,
     comments: [],
@@ -360,7 +322,7 @@ export const useBoardStore = create<BoardState>((set, get) => {
       // Emit real-time event to other collaborators
       const { socket, mode } = usePresenceStore.getState();
       if (mode === 'live' && socket) {
-        (socket as any).emit('comment:created', {
+        (socket as { emit: (e: string, p: unknown) => void }).emit('comment:created', {
           boardId: board.id,
           content: text,
           element_id: opts?.elementId,
@@ -409,7 +371,7 @@ export const useBoardStore = create<BoardState>((set, get) => {
       if (!opts?.remote) {
         const { socket, mode } = usePresenceStore.getState();
         if (mode === 'live' && socket) {
-          (socket as any).emit('comment:removed', {
+          (socket as { emit: (e: string, p: unknown) => void }).emit('comment:removed', {
             boardId: board.id,
             id,
           });
@@ -420,13 +382,14 @@ export const useBoardStore = create<BoardState>((set, get) => {
     },
 
     loadVersions: async () => {
-      const { board } = get();
-      if (!board || board.id.startsWith('demo')) {
+      const { board, isDemo } = get();
+      if (!board || isDemo) {
         set({ versions: demoVersions });
         return;
       }
       const versions = await versionApi.fetchVersions(board.id);
-      set({ versions: versions.length ? versions : demoVersions });
+      // Real boards only ever show their own snapshots — never demo fallbacks.
+      set({ versions });
     },
 
     createVersion: async () => {
@@ -443,7 +406,7 @@ export const useBoardStore = create<BoardState>((set, get) => {
     restoreVersion: async (id) => {
       const { board } = get();
       if (!board) return false;
-      const res = await versionApi.restoreVersion(board.id, id);
+      const res = await versionApi.restoreVersion(id);
       if (res.ok) {
         await get().load(board.id);
         void get().loadVersions();

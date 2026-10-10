@@ -126,7 +126,9 @@ export interface PresenceUser {
   id: string;
   name: string;
   color: string;
-  cursor: PresenceCursor;
+  cursor?: PresenceCursor;
+  /** Epoch ms of the last cursor update — idle cursors are hidden after 5s. */
+  lastSeen?: number;
   isLocal: boolean;
 }
 

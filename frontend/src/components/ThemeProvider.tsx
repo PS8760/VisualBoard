@@ -20,21 +20,3 @@ export function ThemeProvider() {
 
   return null;
 }
-
-/**
- * Inline script injected into <head> via index.html to apply the saved theme
- * class before React hydrates — prevents light flash on dark preference.
- * Not used directly by this component but documented here for reference.
- */
-export function getThemeInitScript(): string {
-  return `
-    (function(){
-      try {
-        var t = localStorage.getItem('visualboard-theme');
-        if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-          document.documentElement.classList.add('dark');
-        }
-      } catch(e){}
-    })();
-  `;
-}

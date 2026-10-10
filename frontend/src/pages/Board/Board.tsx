@@ -14,6 +14,7 @@ import VersionTimeline from './VersionTimeline';
 import CursorsOverlay from './CursorsOverlay';
 import ElementOverlays from './ElementOverlays';
 import DocumentPreview from './DocumentPreview';
+import ArrangeAnalyzing from './ArrangeAnalyzing';
 import { ConnectionBanner, ArrangeBadge } from './ConnectionBanner';
 import { CanvasSkeleton } from '../../components/ui/Skeleton';
 import { useBoardStore } from '../../stores/useBoardStore';
@@ -77,11 +78,10 @@ export default function Board() {
     const presence = usePresenceStore.getState();
     const authUser = useAuthStore.getState().user;
     if (!presence.users.some((u) => u.isLocal)) {
-      presence.addUser({
+      presence.addLocalUser({
         id: authUser?.id ?? 'u_local',
         name: authUser?.name ?? 'Pranav',
         color: authUser?.color ?? '#d9480f',
-        cursor: { x: 0, y: 0, tool: 'select' },
       });
     }
   }, []);
@@ -101,12 +101,23 @@ export default function Board() {
     if (!board?.id) return;
     const suggestions = useBoardStore.getState().suggestions();
     useSuggestionStore.getState().evaluate(suggestions);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board?.id, board?.elements.length]);
 
   // ---- seed content for fresh boards ------------------------------------------
   useEffect(() => {
     if (!board || board.elements.length) return;
+    if (useBoardStore.getState().isDemo) return;
+    // Only seed genuinely new boards, and only once per board — regenerating
+    // demo content on load made existing projects look like they "became demo".
+    const createdAt = Date.parse(board.createdAt);
+    if (!Number.isFinite(createdAt) || Date.now() - createdAt > 15 * 60_000) return;
+    const marker = `vb:seeded:${board.id}`;
+    try {
+      if (window.localStorage.getItem(marker)) return;
+      window.localStorage.setItem(marker, '1');
+    } catch {
+      // storage unavailable — the age gate alone still protects old boards
+    }
     const store = useBoardStore.getState();
     INITIAL_ELEMENTS.forEach((el) => store.addElement(el));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -261,6 +272,7 @@ export default function Board() {
           <ElementOverlays />
           <ConnectionBanner />
           <ArrangeBadge />
+          <ArrangeAnalyzing />
           <VersionTimeline />
 
           {loading && (
