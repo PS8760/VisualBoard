@@ -27,6 +27,13 @@ export const elementUpdateSchema = z.object({
 
 export const elementDeleteSchema = z.object({ boardId, id: elementId });
 
+export const laserPointSchema = z.object({
+  boardId,
+  x: z.number().finite(),
+  y: z.number().finite(),
+  start: z.boolean().optional(),
+});
+
 /** Ephemeral transform while dragging/resizing — never persisted. */
 export const elementPreviewSchema = z.object({
   boardId,
@@ -61,6 +68,7 @@ export default {
   elementUpdateSchema,
   elementDeleteSchema,
   elementPreviewSchema,
+  laserPointSchema,
   commentCreateSchema,
   commentDeleteSchema,
 };

@@ -163,20 +163,34 @@ export const arrangeBoard = async (req: AuthRequest, res: Response, next: NextFu
     const { listElementsByBoard, updateElement } = await import('../element/element.service.js');
     
     const elements = await listElementsByBoard(id);
-    const elementsData = elements.map((el) => {
-      const data = el.element_data as Record<string, unknown>;
-      return {
-        id: el.id,
-        x: typeof data.x === 'number' ? data.x : 0,
-        y: typeof data.y === 'number' ? data.y : 0,
-        width: typeof data.width === 'number' ? data.width : 100,
-        height: typeof data.height === 'number' ? data.height : 100,
-        kind: typeof data.kind === 'string' ? data.kind : undefined,
-        ...data,
-      };
-    });
-    
-    const positions = arrangeElements(elementsData);
+    // Only shapes are laid out. Connectors are relationships (from their
+    // bindings), never boxes to place; ink and comments stay where they are.
+    const LAYOUT_KINDS = new Set(['rect', 'circle', 'sticky', 'document', 'image', 'text']);
+    const nodes = elements
+      .map((el) => ({ id: el.id, data: el.element_data as Record<string, unknown> }))
+      .filter(({ data }) => typeof data.kind === 'string' && LAYOUT_KINDS.has(data.kind) && !data.locked);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const elementsData = nodes.map(({ id: elementId, data }) => ({
+      ...data,
+      id: elementId,
+      x: typeof data.x === 'number' ? data.x : 0,
+      y: typeof data.y === 'number' ? data.y : 0,
+      width: typeof data.width === 'number' ? data.width : 100,
+      height: typeof data.height === 'number' ? data.height : 100,
+      kind: data.kind as string,
+    }));
+    const relationships = elements
+      .map((el) => el.element_data as Record<string, unknown>)
+      .map((data) => ({
+        from: (data.startBinding as { elementId?: string } | null)?.elementId,
+        to: (data.endBinding as { elementId?: string } | null)?.elementId,
+      }))
+      .filter((r): r is { from: string; to: string } => !!r.from && !!r.to && nodeIds.has(r.from) && nodeIds.has(r.to));
+    for (const node of elementsData) {
+      (node as Record<string, unknown>).relationships = relationships.filter((r) => r.from === node.id).map((r) => r.to);
+    }
+
+    const positions = new Map([...arrangeElements(elementsData)].filter(([elementId]) => nodeIds.has(elementId)));
 
     // Persist sequentially (each is an atomic jsonb patch) and fan out the
     // authoritative rows so every collaborator sees the same layout.

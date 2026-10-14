@@ -9,6 +9,7 @@ import {
   elementUpdateSchema,
   elementDeleteSchema,
   elementPreviewSchema,
+  laserPointSchema,
   commentCreateSchema,
   commentDeleteSchema,
 } from './socket.validation.js';
@@ -125,6 +126,19 @@ export const handleConnection = (io: Server, socket: AuthenticatedSocket) => {
       y,
       tool: tool ?? 'select',
     });
+  });
+
+  // Laser pointer: ≤60Hz per socket, volatile, members only (viewers can present too).
+  let lastLaserAt = 0;
+  socket.on(SocketEvents.LASER_POINT, (raw: unknown) => {
+    const parsed = laserPointSchema.safeParse(raw);
+    if (!parsed.success) return;
+    const now = Date.now();
+    if (!parsed.data.start && now - lastLaserAt < 15) return;
+    lastLaserAt = now;
+    const { boardId, x, y, start } = parsed.data;
+    if (!socket.data.joinedBoards.has(boardId)) return;
+    socket.volatile.to(roomOf(boardId)).emit(SocketEvents.LASER_POINT, { id: socket.id, userId, x, y, start });
   });
 
   // ~30Hz ceiling for live drag previews; the final frame is always relayed.

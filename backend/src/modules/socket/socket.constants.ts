@@ -13,6 +13,8 @@ export const SocketEvents = {
   USER_JOIN: 'user:join',
   USER_LEAVE: 'user:leave',
   CURSOR_UPDATE: 'cursor:update',
+  /** Ephemeral laser-pointer trail point (relayed, never persisted). */
+  LASER_POINT: 'laser:point',
 
   ELEMENT_CREATED: 'element:created',
   ELEMENT_UPDATED: 'element:updated',
