@@ -6,7 +6,6 @@ import * as boardApi from '../api/board.api';
 import * as commentApi from '../api/comment.api';
 import * as versionApi from '../api/version.api';
 import { colorForUser, uid } from '../utils';
-import { computeArrange, type ArrangeTarget } from '../services/arrange';
 import { evaluateSuggestions } from '../services/suggestions';
 import { enqueueElementOp, pendingOverlay, resetRealtime, updateSaveStatus, type ElementOp } from '../services/realtime';
 import { useAuthStore } from './useAuthStore';
@@ -67,6 +66,15 @@ interface BoardState {
   replaceElements: (elements: BoardElement[], opts: { reset: boolean }) => void;
 
   copyElements: (ids: string[]) => void;
+  /** Moves elements above (front) or below (back) everything else. */
+  reorder: (ids: string[], direction: 'front' | 'back') => void;
+  setLocked: (ids: string[], locked: boolean) => void;
+  /**
+   * Persists state derived from other elements (e.g. connector routes that
+   * follow a moved shape). Synced like any edit but never an undo step —
+   * undoing the shape move re-derives it.
+   */
+  applyDerivedUpdate: (id: string, patch: Partial<BoardElement>) => void;
   pasteElements: () => void;
   duplicateElements: (ids: string[]) => void;
 
@@ -83,7 +91,6 @@ interface BoardState {
   undo: () => void;
   redo: () => void;
 
-  arrange: () => ArrangeTarget[];
   suggestions: () => ReturnType<typeof evaluateSuggestions>;
 }
 
@@ -432,6 +439,33 @@ export const useBoardStore = create<BoardState>((set, get) => {
       });
     },
 
+    reorder: (ids, direction) => {
+      const board = guardEdit();
+      if (!board || !ids.length) return;
+      const others = board.elements.filter((el) => !ids.includes(el.id)).map((el) => el.zIndex ?? 0);
+      const base = others.length ? (direction === 'front' ? Math.max(...others) + 1 : Math.min(...others) - 1) : 0;
+      // Keep the moved elements' relative order.
+      const moving = board.elements.filter((el) => ids.includes(el.id));
+      moving.forEach((el, i) => updateLocal(el.id, { zIndex: direction === 'front' ? base + i : base - (moving.length - 1 - i) }));
+    },
+
+    applyDerivedUpdate: (id, patch) => {
+      const { canEdit, isDemo } = get();
+      if (!canEdit && !isDemo) return;
+      const wasReplaying = replaying;
+      replaying = true;
+      try {
+        updateLocal(id, patch);
+      } finally {
+        replaying = wasReplaying;
+      }
+    },
+
+    setLocked: (ids, locked) => {
+      if (!guardEdit()) return;
+      ids.forEach((id) => updateLocal(id, { locked }));
+    },
+
     copyElements: (ids) => {
       const { board } = get();
       if (!board) return;
@@ -590,11 +624,6 @@ export const useBoardStore = create<BoardState>((set, get) => {
       set({ history: [...history, entry].slice(-MAX_HISTORY), future: future.slice(1) });
       replay(entry, 'after');
       sealed = true;
-    },
-
-    arrange: () => {
-      const { board } = get();
-      return board ? computeArrange(board.elements) : [];
     },
 
     suggestions: () => {

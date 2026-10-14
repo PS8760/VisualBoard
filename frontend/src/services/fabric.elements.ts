@@ -4,17 +4,20 @@ import {
   Circle,
   Line,
   IText,
+  Textbox,
   Group,
   Path,
   FabricImage,
   FabricObject,
   util,
-  type FabricObjectProps,
   type TPointerEventInfo,
   type TPointerEvent,
 } from 'fabric';
 import type { AttachmentMeta, BoardElement, ElementKind } from '../types';
 import { uid } from '../utils';
+import { ConnectorShape } from './connectors/shape';
+export { ConnectorShape } from './connectors/shape';
+import { readConnector } from './connectors/model';
 
 /*
  * Fabric 7 positions objects by their CENTER by default. Every coordinate in
@@ -61,6 +64,9 @@ export const CANVAS_COLORS = {
   commentFill: '#d9480f',
 };
 
+export { isDarkTheme, themeInk } from './ink';
+import { themeInk } from './ink';
+
 /** Shown in a freshly created text element until the user types. */
 export const TEXT_PLACEHOLDER = 'Type something…';
 
@@ -74,41 +80,113 @@ export function elementKind(obj: FabricObject): ElementKind | undefined {
   return asVB(obj).data?.kind;
 }
 
-/** Custom arrow: Line subclass that renders an arrowhead at the end point. */
-class ArrowLine extends Line {
-  static override type = 'Arrow';
-  arrowSize = 9;
+/* ------------------------------------------------------------------------ */
+/* Labelled shapes                                                          */
+/* ------------------------------------------------------------------------ */
+
+export const LABEL_COLOR = '#1b1a17';
+const LABEL_FONT = 'Inter, ui-sans-serif, system-ui, sans-serif';
+
+/** Word-wraps `text` into lines no wider than `maxWidth` (hard-breaks long words). */
+export function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const out: string[] = [];
+  for (const paragraph of text.split('\n')) {
+    let line = '';
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (ctx.measureText(candidate).width <= maxWidth || !line) {
+        line = candidate;
+        // Hard-break a single word wider than the box.
+        while (ctx.measureText(line).width > maxWidth && line.length > 1) {
+          let cut = line.length - 1;
+          while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > maxWidth) cut--;
+          out.push(line.slice(0, cut));
+          line = line.slice(cut);
+        }
+      } else {
+        out.push(line);
+        line = word;
+      }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/** Draws a centered, wrapped label inside a w×h box centered on the origin. */
+function drawLabel(ctx: CanvasRenderingContext2D, label: string, w: number, h: number, size: number, color: string) {
+  if (!label) return;
+  ctx.save();
+  ctx.font = `500 ${size}px ${LABEL_FONT}`;
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lineHeight = size * 1.3;
+  const maxLines = Math.max(1, Math.floor((h - 8) / lineHeight));
+  let lines = wrapText(ctx, label, Math.max(8, w - 16));
+  if (lines.length > maxLines) {
+    lines = lines.slice(0, maxLines);
+    lines[maxLines - 1] = `${lines[maxLines - 1]!.replace(/.$/, '')}…`;
+  }
+  const startY = -((lines.length - 1) * lineHeight) / 2;
+  lines.forEach((line, i) => ctx.fillText(line, 0, startY + i * lineHeight));
+  ctx.restore();
+}
+
+interface Labelled {
+  label: string;
+  labelSize: number;
+  labelColor: string;
+  /** Hidden while the DOM label editor is open so text isn't drawn twice. */
+  labelHidden: boolean;
+}
+
+/** Rectangle that renders its element `content` as a centered, wrapped label. */
+export class LabeledRect extends Rect implements Labelled {
+  static override type = 'LabeledRect';
+  label = '';
+  labelSize = 14;
+  labelColor = LABEL_COLOR;
+  labelHidden = false;
 
   override _render(ctx: CanvasRenderingContext2D) {
     super._render(ctx);
-    const p = this.calcLinePoints();
-    const angle = Math.atan2(p.y2 - p.y1, p.x2 - p.x1);
-    ctx.save();
-    ctx.fillStyle = this.stroke as string;
-    ctx.translate(p.x2, p.y2);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.moveTo(-this.arrowSize, -this.arrowSize * 0.42);
-    ctx.lineTo(0, 0);
-    ctx.lineTo(-this.arrowSize, this.arrowSize * 0.42);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+    if (!this.labelHidden) drawLabel(ctx, this.label, this.width, this.height, this.labelSize, this.labelColor);
   }
 }
 
-type ArrowOptions = Partial<FabricObjectProps> & {
-  left?: number;
-  top?: number;
-  data?: VBData;
-};
+/** Circle with the same label behaviour (wrapped within the inscribed square). */
+export class LabeledCircle extends Circle implements Labelled {
+  static override type = 'LabeledCircle';
+  label = '';
+  labelSize = 14;
+  labelColor = LABEL_COLOR;
+  labelHidden = false;
 
-function makeArrow(points: [number, number, number, number], options: ArrowOptions = {}): ArrowLine {
-  return new ArrowLine(points, {
-    stroke: CANVAS_COLORS.lineStroke,
-    strokeWidth: 1.75,
-    ...options,
+  override _render(ctx: CanvasRenderingContext2D) {
+    super._render(ctx);
+    const side = (this.radius ?? 0) * Math.SQRT2;
+    if (!this.labelHidden) drawLabel(ctx, this.label, side, side, this.labelSize, this.labelColor);
+  }
+}
+
+export function isLabelled(obj: FabricObject | null | undefined): obj is (LabeledRect | LabeledCircle) {
+  return obj instanceof LabeledRect || obj instanceof LabeledCircle;
+}
+
+/** Locked elements stay selectable (to unlock them) but can't be transformed. */
+export function applyLock(obj: FabricObject, locked: boolean | undefined) {
+  if (!locked) return obj;
+  obj.set({
+    lockMovementX: true,
+    lockMovementY: true,
+    lockScalingX: true,
+    lockScalingY: true,
+    lockRotation: true,
+    hasControls: false,
+    hoverCursor: 'not-allowed',
   });
+  return obj;
 }
 
 interface MaterialOptions {
@@ -116,7 +194,20 @@ interface MaterialOptions {
   evented?: boolean;
 }
 
+const DASHES: Record<string, number[] | null> = { solid: null, dashed: [10, 7], dotted: [1.5, 6] };
+
 export function materializeElement(el: BoardElement, opts: MaterialOptions = {}): FabricObject {
+  const obj = buildObject(el, opts);
+  const dash = el.strokeStyle ? DASHES[el.strokeStyle] : null;
+  if (dash && el.kind !== 'text' && el.kind !== 'sticky' && el.kind !== 'document') {
+    obj.set({ strokeDashArray: dash, strokeLineCap: 'round' });
+  }
+  return applyLock(obj, el.locked);
+}
+
+
+
+function buildObject(el: BoardElement, opts: MaterialOptions): FabricObject {
   const shared = {
     left: el.x,
     top: el.y,
@@ -130,25 +221,36 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
   };
 
   switch (el.kind) {
-    case 'rect':
-      return new Rect({
+    case 'rect': {
+      const rect = new LabeledRect({
         ...shared,
         width: el.width,
         height: el.height,
         rx: el.radius ?? 8,
         ry: el.radius ?? 8,
         fill: el.fill || CANVAS_COLORS.nodeFill,
-        stroke: el.stroke || CANVAS_COLORS.nodeStroke,
-        strokeWidth: el.strokeWidth || 1.5,
+        stroke: themeInk(el.stroke || CANVAS_COLORS.nodeStroke),
+        strokeWidth: el.strokeWidth ?? 1.5,
       });
-    case 'circle':
-      return new Circle({
+      rect.label = el.content ?? '';
+      rect.labelSize = el.fontSize ?? 14;
+      // Labels sit on the shape's fill; on a see-through shape they sit on the canvas.
+      rect.labelColor = el.fill === 'transparent' ? themeInk(el.textColor ?? LABEL_COLOR)! : el.textColor ?? LABEL_COLOR;
+      return rect;
+    }
+    case 'circle': {
+      const circle = new LabeledCircle({
         ...shared,
         radius: Math.min(el.width, el.height) / 2,
         fill: el.fill || CANVAS_COLORS.nodeFill,
-        stroke: el.stroke || CANVAS_COLORS.nodeStroke,
-        strokeWidth: el.strokeWidth || 1.5,
+        stroke: themeInk(el.stroke || CANVAS_COLORS.nodeStroke),
+        strokeWidth: el.strokeWidth ?? 1.5,
       });
+      circle.label = el.content ?? '';
+      circle.labelSize = el.fontSize ?? 14;
+      circle.labelColor = el.fill === 'transparent' ? themeInk(el.textColor ?? LABEL_COLOR)! : el.textColor ?? LABEL_COLOR;
+      return circle;
+    }
     case 'sticky': {
       const bg = new Rect({
         width: el.width,
@@ -161,16 +263,19 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
         selectable: false,
         evented: false,
       });
-      const text = new IText(el.content ?? 'Write a note…', {
-        left: 10,
-        top: 10,
-        width: el.width - 20,
-        fontSize: el.fontSize ?? 13,
+      // Textbox (not IText) so the note's text wraps inside the note.
+      const text = new Textbox(el.content ?? 'Write a note…', {
+        left: 12,
+        top: 12,
+        width: Math.max(20, el.width - 24),
+        fontSize: el.fontSize ?? 14,
+        lineHeight: 1.25,
         fontFamily: 'Inter',
         fill: '#4a3f16',
         selectable: false,
         evented: false,
         editable: false,
+        splitByGrapheme: false,
       });
       const group = new Group([bg, text], {
         ...shared,
@@ -182,23 +287,16 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
       return group;
     }
     case 'line':
-      return new Line((el.points ?? [el.x, el.y, el.x + el.width, el.y]) as [number, number, number, number], {
-        ...shared,
-        left: el.x,
-        top: el.y,
-        stroke: el.stroke || CANVAS_COLORS.lineStroke,
-        strokeWidth: el.strokeWidth || 1.75,
-      });
     case 'arrow':
-      return makeArrow((el.points ?? [el.x, el.y, el.x + el.width, el.y]) as [number, number, number, number], {
-        ...shared,
-        left: el.x,
-        top: el.y,
-        stroke: el.stroke || CANVAS_COLORS.lineStroke,
-        strokeWidth: el.strokeWidth || 1.75,
-      });
+      // Routed, anchored connector (see services/connectors).
+      return new ConnectorShape(readConnector(el), el.id, {
+        selectable: shared.selectable,
+        evented: shared.evented,
+        opacity: shared.opacity,
+        data: shared.data,
+      } as Partial<FabricObject>) as unknown as FabricObject;
     case 'pen': {
-      const stroke = el.stroke || CANVAS_COLORS.penStroke;
+      const stroke = themeInk(el.stroke || CANVAS_COLORS.penStroke)!;
       const strokeWidth = el.strokeWidth || 2;
       const penShared = {
         ...shared,
@@ -234,7 +332,7 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
         ...shared,
         fontSize: el.fontSize ?? 18,
         fontFamily: 'Inter',
-        fill: '#1b1a17',
+        fill: themeInk(el.textColor ?? '#1b1a17'),
       });
     case 'document': {
       const bg = new Rect({
@@ -336,13 +434,32 @@ export function serializeElement(obj: FabricObject): BoardElement | null {
     version: 0,
   } as BoardElement;
 
+  if (obj instanceof ConnectorShape) {
+    return { ...common, fill: 'transparent', content: '', ...obj.toElementPatch() } as BoardElement;
+  }
   if (obj instanceof Line) {
-    const p = (obj as unknown as { calcLinePoints: () => { x1: number; y1: number; x2: number; y2: number } }).calcLinePoints();
+    // Temporary drawing preview (always unrotated): absolute endpoints.
+    const { x1, y1, x2, y2 } = obj as unknown as { x1: number; y1: number; x2: number; y2: number };
     return {
       ...common,
+      x: Math.min(x1, x2),
+      y: Math.min(y1, y2),
+      width: Math.abs(x2 - x1),
+      height: Math.abs(y2 - y1),
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      fill: 'transparent',
       content: '',
-      points: [p.x1, p.y1, p.x2, p.y2],
+      points: [x1, y1, x2, y2],
+      pointsAbsolute: true,
     };
+  }
+  if (isLabelled(obj)) {
+    const base = obj instanceof LabeledCircle
+      ? { width: (obj.radius ?? 1) * 2, height: (obj.radius ?? 1) * 2 }
+      : {};
+    return { ...common, ...base, content: obj.label, fontSize: obj.labelSize };
   }
   if (obj instanceof Path) {
     const segments = obj.path as unknown as TPathData;
@@ -480,10 +597,10 @@ export function startDrawing(canvas: Canvas, kind: ElementKind, point: { x: numb
       object = new Line([point.x, point.y, point.x, point.y], { ...common, left: 0, top: 0, stroke: CANVAS_COLORS.lineStroke, strokeWidth: 1.75 });
       break;
     case 'arrow':
-      object = makeArrow([point.x, point.y, point.x, point.y], { ...common, left: 0, top: 0 });
+      object = new Line([point.x, point.y, point.x, point.y], { ...common, left: 0, top: 0, stroke: CANVAS_COLORS.accentStroke, strokeWidth: 1.75, strokeDashArray: [6, 4] });
       break;
     case 'text':
-      object = new IText('Type…', { ...common, left: point.x, top: point.y, fontSize: 18, fontFamily: 'Inter', fill: '#1b1a17' });
+      object = new IText('Type…', { ...common, left: point.x, top: point.y, fontSize: 18, fontFamily: 'Inter', fill: themeInk('#1b1a17') });
       type = 'text';
       break;
     case 'image':
@@ -610,9 +727,14 @@ export function endDrawing(
   el.id = uid('el');
 
   // Ensure preview styling (semi-transparent) does not persist into final element
-  if (state.kind === 'rect' || state.kind === 'sticky') {
-    el.fill = el.fill ?? CANVAS_COLORS.nodeFill;
-    el.stroke = el.stroke ?? CANVAS_COLORS.nodeStroke;
+  // Drop the translucent preview fill — the final shape is solid.
+  if (state.kind === 'rect') {
+    el.fill = CANVAS_COLORS.nodeFill;
+    el.stroke = CANVAS_COLORS.nodeStroke;
+  }
+  if (state.kind === 'circle') {
+    el.fill = CANVAS_COLORS.nodeFill;
+    el.stroke = CANVAS_COLORS.nodeStroke;
   }
 
   // For sticky notes, ensure proper fill color and add default text

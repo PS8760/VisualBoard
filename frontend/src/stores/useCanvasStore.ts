@@ -17,6 +17,14 @@ interface CanvasState {
   viewport: Viewport;
   gridVisible: boolean;
   ready: boolean;
+  /** True while the user drags/resizes/rotates objects (hides contextual UI). */
+  interacting: boolean;
+  setInteracting: (v: boolean) => void;
+  /** Eased transition to a viewport (pan/zoom), cancelled by user input. */
+  animateTo: (target: Viewport, duration?: number) => void;
+  cancelAnimation: () => void;
+  /** Frames the given world box (or all content) in view. */
+  fitBox: (box: { x: number; y: number; w: number; h: number } | null, opts?: { animate?: boolean; maxScale?: number }) => void;
   register: (canvas: Canvas, container: HTMLDivElement) => void;
   unregister: () => void;
   setReady: (ready: boolean) => void;
@@ -40,6 +48,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   // zoom label) only need the transform once per frame, not once per wheel
   // event, so coalesce store updates.
   let frame: number | null = null;
+  let animFrame: number | null = null;
   const syncViewportFromCanvas = () => {
     if (frame !== null) return;
     frame = requestAnimationFrame(() => {
@@ -68,6 +77,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     viewport: { x: 0, y: 0, scale: 1 },
     gridVisible: true,
     ready: false,
+    interacting: false,
+    setInteracting: (interacting) => {
+      if (get().interacting !== interacting) set({ interacting });
+    },
 
     register: (canvas, container) => {
       const [a, , , , e, f] = canvas.viewportTransform;
@@ -92,6 +105,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     zoomTo: (scale, center) => {
+      get().cancelAnimation();
       const { canvas, container } = get();
       const next = clamp(scale, MIN_SCALE, MAX_SCALE);
       if (!canvas || !container) return;
@@ -126,6 +140,57 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       canvas.setViewportTransform([1, 0, 0, 1, rect.width / 2, rect.height / 2]);
       canvas.requestRenderAll();
       syncViewportFromCanvas();
+    },
+
+    animateTo: (target, duration = 260) => {
+      const { canvas } = get();
+      if (!canvas) return;
+      if (animFrame !== null) cancelAnimationFrame(animFrame);
+      const from = liveViewport();
+      const to = { ...target, scale: clamp(target.scale, MIN_SCALE, MAX_SCALE) };
+      const start = performance.now();
+      const ease = (t: number) => 1 - (1 - t) ** 3;
+      const step = (now: number) => {
+        const t = Math.min(1, (now - start) / duration);
+        const k = ease(t);
+        // Interpolate zoom geometrically so it feels uniform at every scale.
+        const scale = from.scale * (to.scale / from.scale) ** k;
+        const x = from.x + (to.x - from.x) * k;
+        const y = from.y + (to.y - from.y) * k;
+        canvas.setViewportTransform([scale, 0, 0, scale, x, y]);
+        canvas.requestRenderAll();
+        syncViewportFromCanvas();
+        animFrame = t < 1 ? requestAnimationFrame(step) : null;
+      };
+      animFrame = requestAnimationFrame(step);
+    },
+
+    cancelAnimation: () => {
+      if (animFrame !== null) cancelAnimationFrame(animFrame);
+      animFrame = null;
+    },
+
+    fitBox: (box, opts) => {
+      const { container } = get();
+      if (!container) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      let target: Viewport;
+      if (!box) {
+        target = { x: w / 2, y: h / 2, scale: 1 };
+      } else {
+        // Leave room for the floating chrome (top islands, bottom dock).
+        const padX = 120;
+        const padY = 150;
+        const scale = clamp(Math.min((w - padX * 2) / Math.max(box.w, 1), (h - padY * 2) / Math.max(box.h, 1), opts?.maxScale ?? 1), MIN_SCALE, MAX_SCALE);
+        target = { scale, x: w / 2 - (box.x + box.w / 2) * scale, y: h / 2 - (box.y + box.h / 2) * scale };
+      }
+      if (opts?.animate) get().animateTo(target);
+      else {
+        get().canvas?.setViewportTransform([target.scale, 0, 0, target.scale, target.x, target.y]);
+        get().canvas?.requestRenderAll();
+        syncViewportFromCanvas();
+      }
     },
 
     toggleGrid: () => set((s) => ({ gridVisible: !s.gridVisible })),

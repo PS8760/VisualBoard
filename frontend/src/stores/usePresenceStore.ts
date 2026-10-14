@@ -5,6 +5,7 @@ import { colorForUser, throttleTrailing } from '../utils';
 import { DEMO_USERS } from '../data/demo';
 import { useBoardStore } from './useBoardStore';
 import { useAuthStore } from './useAuthStore';
+import { addLaserPoint, setLaserSender } from '../services/laser';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
 export type PresenceMode = 'live' | 'simulated' | 'none';
@@ -288,6 +289,21 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
       socket.on('user:leave', ({ id }: { id: string | number }) => {
         if (gen === generation) get().removeUser(String(id));
       });
+      // Laser pointer relay (ephemeral). Throttled per frame by the caller.
+      setLaserSender((p) => {
+        const { joinedBoardId } = get();
+        const live = joinedBoardId ? toLiveBoardId(joinedBoardId) : null;
+        if (gen === generation && live && socket.connected) {
+          (socket as unknown as { volatile: { emit: (e: string, v: unknown) => void } }).volatile.emit('laser:point', { boardId: live, ...p });
+        }
+      });
+      socket.on('laser:point', (payload: { id: string; userId?: string | number; x: number; y: number; start?: boolean }) => {
+        if (gen !== generation) return;
+        const user = get().users.find((u) => u.id === String(payload.id));
+        const color = user?.color ?? colorForUser(payload.userId ?? payload.id);
+        addLaserPoint(String(payload.id), color, payload, user?.name ?? profileNameFor(payload.userId) ?? undefined, payload.start);
+      });
+
       socket.on('cursor:update', (payload: CursorPayload) => {
         if (gen !== generation) return;
         const key = String(payload.id);
@@ -354,6 +370,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
 
     disconnect: () => {
       generation++;
+      setLaserSender(null);
       const { socket } = get();
       if (socket) (socket as SocketLike).close();
       detachWindow?.();

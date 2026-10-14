@@ -15,6 +15,18 @@ interface UIState {
   arrangeComplete: boolean;
   arrangeAnalyzing: boolean;
   shortcutTooltip: string | null;
+  /** Hides all chrome for a distraction-free canvas. */
+  zen: boolean;
+  minimapVisible: boolean;
+  /** Presence id of the collaborator whose pointer the viewport follows. */
+  followingId: string | null;
+  /** Visual diff of a version against the current board (world-space boxes). */
+  versionDiff: {
+    label: string;
+    added: Array<{ x: number; y: number; w: number; h: number }>;
+    removed: Array<{ x: number; y: number; w: number; h: number }>;
+    changed: Array<{ x: number; y: number; w: number; h: number }>;
+  } | null;
 
   toggleRightPanel: () => void;
   setRightPanel: (open: boolean) => void;
@@ -26,6 +38,10 @@ interface UIState {
   setArrangeComplete: (v: boolean) => void;
   setArrangeAnalyzing: (v: boolean) => void;
   setShortcutTooltip: (s: string | null) => void;
+  setZen: (zen: boolean) => void;
+  setMinimapVisible: (v: boolean) => void;
+  setFollowing: (id: string | null) => void;
+  setVersionDiff: (diff: UIState['versionDiff']) => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -38,6 +54,10 @@ export const useUIStore = create<UIState>((set) => ({
   arrangeComplete: false,
   arrangeAnalyzing: false,
   shortcutTooltip: null,
+  zen: false,
+  minimapVisible: true,
+  followingId: null,
+  versionDiff: null,
 
   toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
   setRightPanel: (rightPanelOpen) => set({ rightPanelOpen }),
@@ -49,4 +69,8 @@ export const useUIStore = create<UIState>((set) => ({
   setArrangeComplete: (arrangeComplete) => set({ arrangeComplete }),
   setArrangeAnalyzing: (arrangeAnalyzing) => set({ arrangeAnalyzing }),
   setShortcutTooltip: (shortcutTooltip) => set({ shortcutTooltip }),
+  setZen: (zen) => set({ zen }),
+  setMinimapVisible: (minimapVisible) => set({ minimapVisible }),
+  setFollowing: (followingId) => set({ followingId }),
+  setVersionDiff: (versionDiff) => set({ versionDiff }),
 }));
