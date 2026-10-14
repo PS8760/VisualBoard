@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  X, ArrowRight, ArrowLeft, Check, MousePointer2, Hand, PenLine, Square, Circle, Minus, Type, StickyNote,
-  Image, FileText, PanelRight, Undo2, Wand2, Command, Sparkles,
+  X, ArrowRight, ArrowLeft, Check, MousePointer2, Hand, PenLine, Square, Type, StickyNote, Spline,
+  Image, FileText, PanelRight, Undo2, Wand2, Command, Sparkles, MessageCircle, Zap, Maximize2, Map as MapIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Kbd } from '../../components/ui/Kbd';
@@ -36,28 +36,27 @@ const STEPS: TourStep[] = [
     id: 'welcome',
     title: 'Welcome to VisualBoard',
     description:
-      'A quick tour of the tools. Everything you do here is saved automatically and shared live with everyone on this board.',
+      'A quick tour of the tools. Everything you do is saved automatically and shared live with everyone on this board.',
   },
   {
     id: 'navigate',
     title: 'Select & move around',
-    description: 'Start here to pick things up and move around the infinite canvas.',
+    description: 'Your tools live in this dock. Start here to pick things up and move around the infinite canvas.',
     targets: ['tool-select', 'tool-hand'],
     items: [
-      { icon: MousePointer2, label: 'Select', keys: ['V'], hint: 'Click to select, drag a box to select many, drag handles to resize or rotate.' },
-      { icon: Hand, label: 'Hand', keys: ['H'], hint: 'Drag to pan. Or hold Space with any tool. Zoom with ⌘/Ctrl + scroll or pinch.' },
+      { icon: MousePointer2, label: 'Select', keys: ['V'], hint: 'Click to select, drag a box to select many. Objects snap to smart guides — hold Alt to place freely.' },
+      { icon: Hand, label: 'Hand', keys: ['H'], hint: 'Drag (with momentum) to pan, or hold Space with any tool. Zoom with ⌘/Ctrl + scroll or pinch.' },
     ],
   },
   {
     id: 'draw',
-    title: 'Draw & diagram',
-    description: 'Pick a tool, then drag on the canvas. Hold Shift for perfect squares/circles and 45° lines.',
-    targets: ['tool-pen', 'tool-rect', 'tool-circle', 'tool-line', 'tool-arrow'],
+    title: 'Draw, shapes & connectors',
+    description: 'Pick a tool, then drag on the canvas. Hold Shift for perfect squares, circles and 45° lines.',
+    targets: ['tool-pen', 'tool-shapes'],
     items: [
-      { icon: PenLine, label: 'Pen', keys: ['P'], hint: 'Freehand sketching — width and color appear in a mini toolbar.' },
-      { icon: Square, label: 'Rectangle', keys: ['R'], hint: 'Boxes for services, steps and groups.' },
-      { icon: Circle, label: 'Circle', keys: ['O'], hint: 'Nodes, states and highlights.' },
-      { icon: Minus, label: 'Line / Arrow', keys: ['L', 'A'], hint: 'Connect things and show direction of flow.' },
+      { icon: PenLine, label: 'Draw', keys: ['P'], hint: 'Pen or highlighter. Hold still at the end of a stroke to snap it into a clean line, circle or box.' },
+      { icon: Square, label: 'Shapes', keys: ['R', 'O'], hint: 'Rectangles and circles — double-click (or press Enter) to type a label inside.' },
+      { icon: Spline, label: 'Connectors', keys: ['A', 'L'], hint: 'Drag from one shape to another — the arrow stays attached when they move.' },
     ],
   },
   {
@@ -67,13 +66,13 @@ const STEPS: TourStep[] = [
     targets: ['tool-text', 'tool-sticky'],
     items: [
       { icon: Type, label: 'Text', keys: ['T'], hint: 'Labels and headings anywhere on the canvas.' },
-      { icon: StickyNote, label: 'Sticky note', keys: ['S'], hint: 'Quick ideas and to-dos your team can see instantly.' },
+      { icon: StickyNote, label: 'Sticky note', keys: ['S'], hint: 'Quick ideas your team sees instantly. Text wraps inside the note.' },
     ],
   },
   {
     id: 'media',
     title: 'Images & documents',
-    description: 'You can also drag files straight from your computer onto the canvas — or onto an element to attach them to it.',
+    description: 'You can also drag files straight onto the canvas — or onto an element to attach them to it.',
     targets: ['tool-image', 'tool-document'],
     items: [
       { icon: Image, label: 'Image', keys: ['I'], hint: 'Place a PNG, JPEG or WebP on the board.' },
@@ -81,52 +80,71 @@ const STEPS: TourStep[] = [
     ],
   },
   {
-    id: 'comment',
-    title: 'Comment threads',
+    id: 'present',
+    title: 'Comment & present',
+    description: 'Discuss and point things out without leaving the canvas.',
+    targets: ['tool-comment', 'tool-laser'],
+    items: [
+      { icon: MessageCircle, label: 'Comment', keys: ['C'], hint: 'Click an element or any spot to start a thread. Pins stay put while you pan and zoom.' },
+      { icon: Zap, label: 'Laser pointer', keys: ['K'], hint: 'A glowing, fading trail every collaborator sees live — perfect for walkthroughs.' },
+    ],
+  },
+  {
+    id: 'selection',
+    title: 'Quick actions follow your selection',
     description:
-      'Press C, then click an element or any empty spot to start a thread. Pins stay attached while you pan, zoom or move the element — click one to read and reply.',
-    targets: ['tool-comment'],
+      'Select anything and a toolbar appears right above it: colors, stroke style, text size, layer order, duplicate, lock, comment and delete.',
   },
   {
     id: 'panel',
     title: 'Side panel',
-    description: 'Inspect and style the selection, browse every comment and attached document, and ask the AI reviewer for suggestions.',
+    description: 'Inspect the selection, browse every comment and attached document, and ask the AI reviewer for suggestions.',
     targets: ['panel'],
     revealPanel: true,
     items: [
-      { icon: PanelRight, label: 'Info', hint: 'Fill, stroke, font size and opacity of the selection.' },
+      { icon: PanelRight, label: 'Info', hint: 'Properties and board stats.' },
       { icon: Sparkles, label: 'Suggestions', hint: 'AI analysis of your board for gaps and risks.' },
     ],
   },
   {
     id: 'history',
-    title: 'Version history',
+    title: 'Version history & time-travel',
     description:
-      'The board snapshots itself automatically as you work. Open the timeline to save a checkpoint or restore an earlier version for everyone.',
+      'Snapshots are taken automatically as you work. Pick one to preview exactly what a restore would change on the canvas — then restore it for everyone.',
     targets: ['history'],
   },
   {
     id: 'share',
     title: 'Collaborate live',
-    description: 'Copy the link to invite people. Collaborators appear here, and you see their cursors and edits in real time.',
+    description: 'Copy the link to invite people. Click a collaborator’s avatar to follow their pointer — great for presentations.',
     targets: ['share', 'presence'],
     fallbackTargets: ['share'],
   },
   {
+    id: 'navigation',
+    title: 'Zoom, minimap & zen',
+    description: 'Zoom smoothly, fit everything in view, jump around with the minimap, or hide all UI with zen mode.',
+    targets: ['zoom'],
+    items: [
+      { icon: Maximize2, label: 'Fit to content', keys: ['⇧', '1'], hint: 'Frame the whole board.' },
+      { icon: MapIcon, label: 'Minimap', keys: ['M'], hint: 'Click or drag to navigate large boards.' },
+    ],
+  },
+  {
     id: 'bottom',
     title: 'Undo, arrange & commands',
-    description: 'Undo only reverts your own changes, never your teammates’. Auto Arrange tidies the layout in one click.',
+    description: 'Undo only reverts your own changes, never your teammates’. Arrange tidies the layout in one click.',
     targets: ['arrange', 'undo', 'redo'],
     items: [
-      { icon: Undo2, label: 'Undo / Redo', keys: ['⌘', 'Z'], hint: 'Add Shift to redo.' },
-      { icon: Wand2, label: 'Auto Arrange', keys: ['⇧', 'A'], hint: 'Lay elements out in a clean structure.' },
+      { icon: Undo2, label: 'Undo / Redo', keys: ['⌘', 'Z'], hint: 'Add Shift (or ⌘Y) to redo.' },
+      { icon: Wand2, label: 'Arrange', keys: ['⇧', 'A'], hint: 'Lay elements out in a clean structure.' },
       { icon: Command, label: 'Commands', keys: ['⌘', 'K'], hint: 'Search every action and shortcut.' },
     ],
   },
   {
     id: 'done',
     title: 'You’re all set',
-    description: 'Press Esc anytime to return to the Select tool. You can replay this tour from the Help button (?) in the corner.',
+    description: 'Press Esc anytime to return to Select. Replay this tour from Help (?) in the bottom-right corner.',
   },
 ];
 
@@ -168,13 +186,19 @@ function placeCard(box: Box | null, cardH: number) {
   const clampY = (y: number) => Math.max(MARGIN, Math.min(y, vh - cardH - MARGIN));
   if (!box) return { left: (vw - w) / 2, top: Math.max(MARGIN, (vh - cardH) / 2), width: w };
 
-  const right = box.left + box.width + GAP;
-  if (right + w <= vw - MARGIN) return { left: right, top: clampY(box.top + box.height / 2 - cardH / 2), width: w };
-  const below = box.top + box.height + GAP;
-  if (below + cardH <= vh - MARGIN) return { left: clampX(box.left + box.width / 2 - w / 2), top: below, width: w };
+  const cy = box.top + box.height / 2;
   const above = box.top - GAP - cardH;
-  if (above >= MARGIN) return { left: clampX(box.left + box.width / 2 - w / 2), top: above, width: w };
-  return { left: clampX(box.left - GAP - w), top: clampY(box.top), width: w };
+  const below = box.top + box.height + GAP;
+  const right = box.left + box.width + GAP;
+  const leftSide = box.left - GAP - w;
+  const centerX = clampX(box.left + box.width / 2 - w / 2);
+  // Floating chrome hugs the screen edges: open away from the edge it sits on.
+  if (cy > vh * 0.6 && above >= MARGIN) return { left: centerX, top: above, width: w };
+  if (cy < vh * 0.3 && below + cardH <= vh - MARGIN) return { left: centerX, top: below, width: w };
+  if (right + w <= vw - MARGIN) return { left: right, top: clampY(cy - cardH / 2), width: w };
+  if (leftSide >= MARGIN) return { left: leftSide, top: clampY(cy - cardH / 2), width: w };
+  if (above >= MARGIN) return { left: centerX, top: above, width: w };
+  return { left: centerX, top: clampY(below), width: w };
 }
 
 export default function OnboardingOverlay() {
@@ -382,7 +406,7 @@ export default function OnboardingOverlay() {
               <button
                 ref={nextRef}
                 onClick={() => go(1)}
-                className="flex h-8 items-center gap-1.5 rounded-sm bg-ink px-3 text-[12px] font-medium text-paper transition-colors hover:bg-black"
+                className="flex h-8 items-center gap-1.5 rounded-sm bg-ink px-3 text-[12px] font-medium text-paper transition-colors hover:bg-ink-hover"
               >
                 {isLast ? (
                   <>

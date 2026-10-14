@@ -206,7 +206,7 @@ function ThreadPopover({
           <button
             onClick={post}
             disabled={!draft.trim()}
-            className="h-7 rounded-sm bg-ink px-2.5 text-[11px] font-medium text-paper transition-colors hover:bg-black disabled:opacity-40"
+            className="h-7 rounded-sm bg-ink px-2.5 text-[11px] font-medium text-paper transition-colors hover:bg-ink-hover disabled:opacity-40"
           >
             Post
           </button>

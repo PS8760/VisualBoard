@@ -6,6 +6,8 @@ import { useUIStore } from '../../stores/useUIStore';
 import { useBoardStore } from '../../stores/useBoardStore';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { timeAgo, cn } from '../../utils';
+import { fetchVersionElements } from '../../api/version.api';
+import { computeVersionDiff } from '../../services/versionDiff';
 
 export default function VersionTimeline() {
   const open = useUIStore((s) => s.versionTimelineOpen);
@@ -19,6 +21,8 @@ export default function VersionTimeline() {
   const isOwner = board?.members.find((m) => m.id === me)?.role === 'owner';
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState<'restore' | 'save' | null>(null);
+  const [compare, setCompare] = useState(true);
+  const diff = useUIStore((s) => s.versionDiff);
 
   useEffect(() => {
     if (open) void useBoardStore.getState().loadVersions();
@@ -26,6 +30,29 @@ export default function VersionTimeline() {
 
   const ordered = [...versions].reverse();
   const selected = ordered.find((v) => v.id === selectedId) ?? ordered[ordered.length - 1];
+  const selectedVersionId = selected?.id;
+
+  // Live diff of the selected version against the board, drawn on the canvas.
+  useEffect(() => {
+    const ui = useUIStore.getState();
+    if (!open || !compare || !selectedVersionId || !board?.id) {
+      ui.setVersionDiff(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchVersionElements(board.id, selectedVersionId).then((snapshot) => {
+      if (cancelled || !snapshot) return;
+      const current = useBoardStore.getState().board?.elements ?? [];
+      const label = ordered.find((v) => v.id === selectedVersionId)?.label ?? '';
+      useUIStore.getState().setVersionDiff({ label, ...computeVersionDiff(snapshot, current) });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, compare, selectedVersionId, board?.id, board?.elements]);
+
+  useEffect(() => () => useUIStore.getState().setVersionDiff(null), []);
 
   const handleRestore = async () => {
     if (!selected || busy) return;
@@ -59,11 +86,11 @@ export default function VersionTimeline() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -12 }}
           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-          className="absolute inset-x-0 top-12 z-30 border-b border-line bg-paper shadow-md"
+          className="glass absolute left-1/2 top-16 z-30 w-[min(780px,calc(100%-24px))] -translate-x-1/2 rounded-2xl"
           role="dialog"
           aria-label="Version history"
         >
-          <div className="mx-auto max-w-3xl px-5 py-4">
+          <div className="px-5 py-4">
             <div className="mb-4 flex items-center justify-between">
               <p className="flex items-center gap-2 text-[13px] font-semibold text-ink">
                 <HistoryIcon size={14} className="text-ink-3" />
@@ -127,7 +154,25 @@ export default function VersionTimeline() {
               </div>
             )}
 
-            <div className="mt-3 flex items-center justify-between border-t border-line pt-2.5">
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-2.5">
+              <label className="flex cursor-pointer items-center gap-2 text-[11.5px] font-medium text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={compare}
+                  onChange={(e) => setCompare(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-[var(--color-accent)]"
+                />
+                Preview changes on canvas
+              </label>
+              {compare && diff && (
+                <span className="flex items-center gap-3 font-mono text-[10px] text-ink-3" aria-live="polite">
+                  <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-success" />{diff.removed.length} come back</span>
+                  <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-warning" />{diff.changed.length} change</span>
+                  <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-danger" />{diff.added.length} get removed</span>
+                </span>
+              )}
+            </div>
+            <div className="mt-2.5 flex items-center justify-between">
               <p className="font-mono text-[9.5px] text-ink-3">
                 auto-saved after edits settle · {ordered.length} snapshot{ordered.length === 1 ? '' : 's'}
                 {!isOwner && !isDemo ? ' · only owners can restore' : ''}
@@ -135,7 +180,7 @@ export default function VersionTimeline() {
               <button
                 disabled={!selected || !!busy || !isOwner || isDemo}
                 onClick={handleRestore}
-                className="flex h-6 items-center gap-1.5 rounded-sm bg-ink px-2.5 text-[10.5px] font-medium text-paper transition-colors hover:bg-black disabled:pointer-events-none disabled:opacity-40"
+                className="flex h-6 items-center gap-1.5 rounded-sm bg-ink px-2.5 text-[10.5px] font-medium text-paper transition-colors hover:bg-ink-hover disabled:pointer-events-none disabled:opacity-40"
               >
                 {busy === 'restore' && <Loader2 size={10} className="animate-spin" />}
                 {busy === 'restore' ? 'Restoring…' : 'Restore'}

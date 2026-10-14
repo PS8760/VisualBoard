@@ -117,12 +117,3 @@ export async function deleteBoard(boardId: string): Promise<{ ok: boolean; messa
     return { ok: false, message: apiErrorMessage(error) };
   }
 }
-
-export async function arrangeBoard(boardId: string): Promise<{ ok: boolean; positions?: Record<string, { x: number; y: number }>; message?: string }> {
-  try {
-    const { data } = await client.post<{ data?: { positions?: Record<string, { x: number; y: number }> } }>(`/boards/${boardId}/arrange`);
-    return { ok: true, positions: data?.data?.positions };
-  } catch (error) {
-    return { ok: false, message: apiErrorMessage(error) };
-  }
-}

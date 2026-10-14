@@ -1,3 +1,4 @@
+import { TooltipGroup } from './components/ui/Tooltip';
 import { useEffect, useState } from 'react';
 import { RouterProvider } from 'react-router-dom';
 import { Toaster } from 'sonner';
@@ -24,7 +25,9 @@ function App() {
       <ThemeProvider />
       {booting && <LoadingScreen />}
       <div className={booting ? 'invisible' : undefined}>
-        <RouterProvider router={router} />
+        <TooltipGroup>
+          <RouterProvider router={router} />
+        </TooltipGroup>
       </div>
       <Toaster
         position="bottom-right"

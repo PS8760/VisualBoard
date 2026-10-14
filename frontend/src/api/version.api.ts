@@ -71,3 +71,15 @@ export async function restoreVersion(
     return { ok: false, message: apiErrorMessage(error) };
   }
 }
+
+/** Full snapshot body of one version (for previews/diffs). */
+export async function fetchVersionElements(boardId: string, versionId: string): Promise<BoardElement[] | null> {
+  try {
+    const { data } = await client.get<{ data?: BackendVersion }>(`/boards/${boardId}/versions/${versionId}`);
+    const s = data?.data?.snapshot;
+    const list = Array.isArray(s) ? s : s && typeof s === 'object' && Array.isArray((s as { elements?: unknown }).elements) ? (s as { elements: unknown[] }).elements : [];
+    return list as BoardElement[];
+  } catch {
+    return null;
+  }
+}

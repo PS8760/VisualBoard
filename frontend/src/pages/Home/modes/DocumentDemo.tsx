@@ -126,7 +126,7 @@ export default function DocumentDemo() {
                     {formatFileSize(FILE.size)} · uploaded {FILE.uploadedAt}
                   </span>
                   <button
-                    className="inline-flex h-6 items-center gap-1.5 rounded-sm bg-ink px-2.5 text-[10.5px] font-medium text-paper hover:bg-black"
+                    className="inline-flex h-6 items-center gap-1.5 rounded-sm bg-ink px-2.5 text-[10.5px] font-medium text-paper hover:bg-ink-hover"
                   >
                     <Download size={11} /> Open
                   </button>

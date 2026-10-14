@@ -112,7 +112,7 @@ export default function SuggestionsDemo() {
                 <div className="mt-2 flex gap-1.5">
                   <button
                     onClick={() => applySuggestion(s.id)}
-                    className="inline-flex h-6 flex-1 items-center justify-center gap-1 rounded-sm bg-ink px-2 text-[10.5px] font-medium text-paper transition-colors hover:bg-black"
+                    className="inline-flex h-6 flex-1 items-center justify-center gap-1 rounded-sm bg-ink px-2 text-[10.5px] font-medium text-paper transition-colors hover:bg-ink-hover"
                   >
                     <Plus size={11} /> Apply
                   </button>

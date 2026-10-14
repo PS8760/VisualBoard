@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Canvas as FabricCanvas,
   FabricObject,
@@ -18,6 +18,7 @@ import { useToolStore } from '../../stores/useToolStore';
 import { useCanvasStore } from '../../stores/useCanvasStore';
 import { usePresenceStore } from '../../stores/usePresenceStore';
 import { useUIStore } from '../../stores/useUIStore';
+import { useThemeStore } from '../../stores/useThemeStore';
 import {
   materializeElement,
   serializeElement,
@@ -30,7 +31,11 @@ import {
   asVB,
   renderSignature,
   worldTransform,
+  isLabelled,
+  ConnectorShape,
+  themeInk,
   TEXT_PLACEHOLDER,
+  CANVAS_COLORS,
   type DrawingState,
 } from '../../services/fabric.elements';
 import { animateElementIn } from '../../animations/boardAnimations';
@@ -38,6 +43,29 @@ import { throttleTrailing, uid } from '../../utils';
 import { uploadDocument } from '../../api/document.api';
 import { emitElementPreview, onElementPreview } from '../../services/realtime';
 import { ALLOWED_UPLOAD_TYPES, imageToInlineDataUrl, validateUploadFile } from '../../services/media';
+import {
+  computeSnap,
+  elementBox,
+  recognizeStroke,
+  sortByZ,
+  unionBox,
+  type Box,
+  type Guide,
+} from '../../services/geometry';
+import { addLaserPoint, sendLaserPoint } from '../../services/laser';
+import { connectorPatch, readConnector, type ConnectorModel, type Side } from '../../services/connectors/model';
+import {
+  anchorPoints,
+  computeConnectorPath,
+  isRedundantWaypoint,
+  nearestOnPath,
+  pointAt,
+  resolveEnds,
+  sceneFrom,
+  type Scene,
+} from '../../services/connectors/route';
+import { setConnectorEditHook, setConnectorSceneProvider, type ConnectorHandle } from '../../services/connectors/shape';
+import { snapEnd } from '../../services/connectors/snap';
 import type { AttachmentMeta, BoardElement, Tool } from '../../types';
 import { CanvasSkeleton } from '../../components/ui/Skeleton';
 import EmptyBoard from './EmptyBoard';
@@ -50,6 +78,7 @@ const CURSOR = {
   text: 'text',
   grab: 'grab',
   grabbing: 'grabbing',
+  laser: "url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2220%22 height=%2220%22><circle cx=%2210%22 cy=%2210%22 r=%225%22 fill=%22%23ef4444%22 stroke=%22white%22 stroke-width=%222%22/></svg>') 10 10, crosshair",
 } as const;
 
 const SHAPE_TOOLS = new Set(['rect', 'circle', 'line', 'arrow', 'sticky', 'image', 'document', 'comment', 'pen']);
@@ -72,6 +101,11 @@ function setCursorsForTool(canvas: FabricCanvas, tool: string) {
     canvas.hoverCursor = CURSOR.grab;
     return;
   }
+  if (tool === 'laser') {
+    canvas.defaultCursor = CURSOR.laser;
+    canvas.hoverCursor = CURSOR.laser;
+    return;
+  }
   canvas.defaultCursor = CURSOR.arrow;
   canvas.hoverCursor = CURSOR.arrowAccent;
 }
@@ -84,6 +118,15 @@ function exitEditingTexts(canvas: FabricCanvas) {
   };
   canvas.getObjects().forEach(visit);
 }
+
+/** Shapes for connector routing, memoized per element-array identity. */
+let sceneCache: { elements: BoardElement[] | null; scene: Scene } = { elements: null, scene: sceneFrom([]) };
+function connectorScene(): Scene {
+  const elements = useBoardStore.getState().board?.elements ?? [];
+  if (elements !== sceneCache.elements) sceneCache = { elements, scene: sceneFrom(elements) };
+  return sceneCache.scene;
+}
+setConnectorSceneProvider(connectorScene);
 
 const readOnlyNotice = () => toast.info('This board is view-only for you', { id: 'vb-readonly' });
 
@@ -114,6 +157,25 @@ export default function CanvasStage() {
   const reconcilingRef = useRef(false);
   const suppressReconcileRef = useRef(false);
   const reconcileRef = useRef<(full?: boolean) => void>(() => {});
+  /** Alignment guides drawn while moving objects (world coords). */
+  const guidesRef = useRef<Guide[]>([]);
+  /** Shape a connector end is about to attach to (+ snapped side) — drawn as a magnetic halo. */
+  const magnetRef = useRef<{ targetId: string; side?: Side } | null>(null);
+  /** Last pointer movement while inking — a still pointer at release = "hold to snap". */
+  const lastInkMoveRef = useRef(0);
+  const laserDownRef = useRef(false);
+  const startLabelEditRef = useRef<(obj: FabricObject) => void>(() => {});
+  const ensureFlowRef = useRef<() => void>(() => {});
+  const [labelEdit, setLabelEdit] = useState<{
+    id: string;
+    box: { x: number; y: number; w: number; h: number };
+    value: string;
+    fontSize: number;
+    color: string;
+    circle: boolean;
+    /** Editing a connector's mid-line label at this position along the path. */
+    connectorT?: number;
+  } | null>(null);
 
   const showDims = (label: string, x: number, y: number) => {
     const el = dimsRef.current;
@@ -135,6 +197,8 @@ export default function CanvasStage() {
   const tool = useToolStore((s) => s.tool);
   const penWidth = useToolStore((s) => s.penWidth);
   const penColor = useToolStore((s) => s.penColor);
+  const penMode = useToolStore((s) => s.penMode);
+  const theme = useThemeStore((s) => s.theme);
 
   /* ---------------------------------------------------------------------- */
   /* Local → store helpers                                                  */
@@ -188,14 +252,18 @@ export default function CanvasStage() {
     canvas.isDrawingMode = isPen;
     if (isPen) {
       const brush = new PencilBrush(canvas);
-      brush.width = penWidth;
-      brush.color = penColor;
+      const highlighter = penMode === 'highlighter';
+      brush.width = highlighter ? penWidth * 4 : penWidth;
+      const liveColor = themeInk(penColor) ?? penColor;
+      brush.color = highlighter ? `${liveColor}59` : liveColor;
+      // Drop jittery sub-pixel points for smoother ink.
+      brush.decimate = 2.5;
       canvas.freeDrawingBrush = brush;
       canvas.selection = false;
       canvas.skipTargetFind = false;
       canvas.freeDrawingCursor = CURSOR.crosshair;
       setCursorsForTool(canvas, tool);
-    } else if (tool === 'hand') {
+    } else if (tool === 'hand' || tool === 'laser') {
       canvas.selection = false;
       canvas.skipTargetFind = true;
       setCursorsForTool(canvas, tool);
@@ -206,7 +274,9 @@ export default function CanvasStage() {
       }
     } else {
       canvas.selection = tool === 'select' && canEdit;
-      canvas.skipTargetFind = false;
+      // Creation tools must never grab the object under the pointer — starting
+      // a shape or connector on top of another element used to drag it.
+      canvas.skipTargetFind = tool !== 'select';
       setCursorsForTool(canvas, tool);
       if (tool !== 'select' && canvas.getActiveObjects().length) {
         canvas.discardActiveObject();
@@ -214,7 +284,7 @@ export default function CanvasStage() {
         canvas.requestRenderAll();
       }
     }
-  }, [tool, penWidth, penColor]);
+  }, [tool, penWidth, penColor, penMode, theme]);
 
   const shouldPan = (e: MouseEvent) => {
     const current = useToolStore.getState().tool;
@@ -277,12 +347,30 @@ export default function CanvasStage() {
           deferredRef.current.clear();
         }
 
+        const ordered = sortByZ(board.elements);
         const seen = new Set<string>();
-        for (const el of board.elements) {
+        // Shapes whose geometry changed this pass — connectors near them re-route.
+        const changedShapes = new Set<string>();
+        const changedBoxes: Box[] = [];
+        const rebuilt = new Set<string>();
+        const noteShape = (el: BoardElement, before?: BoardElement) => {
+          if (el.kind === 'line' || el.kind === 'arrow') return;
+          const a = elementBox(el);
+          if (before) {
+            const b = elementBox(before);
+            if (a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h) return;
+            changedBoxes.push(b);
+          }
+          changedShapes.add(el.id);
+          changedBoxes.push(a);
+        };
+        for (const el of ordered) {
           seen.add(el.id);
           const obj = objectMapRef.current.get(el.id);
           if (!obj) {
             canvas.add(buildObject(el));
+            rebuilt.add(el.id);
+            if (!full) noteShape(el);
             continue;
           }
           const synced = syncedRef.current.get(el.id);
@@ -299,6 +387,8 @@ export default function CanvasStage() {
           }
           const wasActive = canvas.getActiveObject() === obj;
           const index = canvas.getObjects().indexOf(obj);
+          noteShape(el, synced?.ref);
+          rebuilt.add(el.id);
           const next = buildObject(el);
           canvas.remove(obj);
           canvas.insertAt(Math.max(0, index), next);
@@ -307,8 +397,33 @@ export default function CanvasStage() {
         }
 
         for (const [id, obj] of [...objectMapRef.current]) {
-          if (!seen.has(id)) removeObject(id, obj);
+          if (!seen.has(id)) {
+            const gone = syncedRef.current.get(id)?.ref;
+            if (gone) noteShape(gone);
+            removeObject(id, obj);
+          }
         }
+        // Re-route connectors attached to changed shapes, and orthogonal
+        // routes whose corridor they touch (obstacle avoidance).
+        if (changedBoxes.length) {
+          const region = unionBox(changedBoxes)!;
+          const near = { x: region.x - 340, y: region.y - 340, w: region.w + 680, h: region.h + 680 };
+          for (const obj of canvas.getObjects()) {
+            if (!(obj instanceof ConnectorShape) || rebuilt.has(obj.connectorId)) continue;
+            const m = obj.model;
+            const attached = (m.start.elementId && changedShapes.has(m.start.elementId)) || (m.end.elementId && changedShapes.has(m.end.elementId));
+            const b = obj.path.bbox;
+            const crosses = m.routing === 'elbow' && b.x < near.x + near.w && b.x + b.w > near.x && b.y < near.y + near.h && b.y + b.h > near.y;
+            if (attached || crosses) obj.recompute(connectorScene(), { keepControls: isBusy(obj) });
+          }
+        }
+        ensureFlowRef.current();
+        // Stacking order follows zIndex (then creation order).
+        const objects = canvas.getObjects();
+        ordered.forEach((el, i) => {
+          const obj = objectMapRef.current.get(el.id);
+          if (obj && objects[i] !== obj) canvas.moveObjectTo(obj, i);
+        });
         canvas.requestRenderAll();
       } finally {
         reconcilingRef.current = false;
@@ -333,7 +448,160 @@ export default function CanvasStage() {
         emitElementPreview({ id, x: t.cx, y: t.cy, rotation: t.angle, scaleX: t.scaleX, scaleY: t.scaleY, end });
       }
     }, 50);
-    const onTransforming = () => sendPreview(false);
+    /** Connectors follow shapes live while they're dragged (persisted by the maintenance pass). */
+    const routeLiveConnectors = () => {
+      const board = useBoardStore.getState().board;
+      if (!board) return;
+      const active = canvas.getActiveObjects();
+      const movedIds = new Set(active.map((o) => elementId(o)).filter(Boolean) as string[]);
+      const overrides = new Map<string, Box>();
+      for (const obj of active) {
+        const id = elementId(obj);
+        if (!id || obj instanceof ConnectorShape) continue;
+        const b = obj.getBoundingRect();
+        overrides.set(id, { x: b.left, y: b.top, w: b.width, h: b.height });
+      }
+      if (!overrides.size) return;
+      const scene = sceneFrom(board.elements, overrides);
+      for (const obj of canvas.getObjects()) {
+        if (!(obj instanceof ConnectorShape) || movedIds.has(obj.connectorId)) continue;
+        const { start, end } = obj.model;
+        if ((start.elementId && overrides.has(start.elementId)) || (end.elementId && overrides.has(end.elementId))) {
+          obj.recompute(scene, { keepControls: true });
+        }
+      }
+    };
+
+    const onTransforming = (opt: { e?: Event; transform?: { action?: string } }) => {
+      useCanvasStore.getState().setInteracting(true);
+      sendPreview(false);
+      const active = canvas.getActiveObject();
+      // Smart guides on move (hold Alt to place freely).
+      if (active && opt.transform?.action === 'drag' && !(opt.e as MouseEvent | undefined)?.altKey) {
+        const box = active.getBoundingRect();
+        const activeSet = new Set(canvas.getActiveObjects());
+        const others = canvas
+          .getObjects()
+          .filter((o) => o !== active && !activeSet.has(o) && elementId(o) && o.visible && o.isOnScreen())
+          .slice(0, 400)
+          .map((o) => {
+            const b = o.getBoundingRect();
+            return { x: b.left, y: b.top, w: b.width, h: b.height };
+          });
+        const snap = computeSnap({ x: box.left, y: box.top, w: box.width, h: box.height }, others, 6 / canvas.getZoom());
+        if (snap.dx || snap.dy) {
+          active.set({ left: (active.left ?? 0) + snap.dx, top: (active.top ?? 0) + snap.dy });
+          active.setCoords();
+        }
+        guidesRef.current = snap.guides;
+      } else {
+        guidesRef.current = [];
+      }
+      routeLiveConnectors();
+    };
+
+    /** Draws alignment guides and magnetic connector feedback above the scene. */
+    const onAfterRender = (opt: { ctx: CanvasRenderingContext2D }) => {
+      const guides = guidesRef.current;
+      const magnet = magnetRef.current;
+      if (!guides.length && !magnet) return;
+      const ctx = opt.ctx;
+      const vpt = canvas.viewportTransform;
+      const zoom = canvas.getZoom();
+      ctx.save();
+      ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
+      ctx.strokeStyle = '#e8590c';
+      ctx.lineWidth = 1 / zoom;
+      ctx.setLineDash([4 / zoom, 3 / zoom]);
+      for (const g of guides) {
+        ctx.beginPath();
+        if (g.axis === 'x') {
+          ctx.moveTo(g.at, g.from);
+          ctx.lineTo(g.at, g.to);
+        } else {
+          ctx.moveTo(g.from, g.at);
+          ctx.lineTo(g.to, g.at);
+        }
+        ctx.stroke();
+      }
+      const shape = magnet ? connectorScene().shape(magnet.targetId) : undefined;
+      if (magnet && shape) {
+        // Perimeter halo …
+        const b = shape.box;
+        const pad = 6 / zoom;
+        ctx.setLineDash([]);
+        ctx.lineWidth = 2 / zoom;
+        ctx.strokeStyle = 'rgba(232, 89, 12, 0.85)';
+        ctx.fillStyle = 'rgba(232, 89, 12, 0.07)';
+        ctx.beginPath();
+        if (shape.kind === 'circle') {
+          ctx.arc(b.x + b.w / 2, b.y + b.h / 2, Math.min(b.w, b.h) / 2 + pad, 0, Math.PI * 2);
+        } else {
+          ctx.roundRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2, 10 / zoom);
+        }
+        ctx.fill();
+        ctx.stroke();
+        // … and anchor dots; the snapped one is filled.
+        for (const a of anchorPoints(shape)) {
+          const on = magnet.side === a.side;
+          ctx.beginPath();
+          ctx.arc(a.point.x, a.point.y, (on ? 6 : 4.5) / zoom, 0, Math.PI * 2);
+          ctx.fillStyle = on ? '#e8590c' : '#ffffff';
+          ctx.fill();
+          ctx.lineWidth = 1.5 / zoom;
+          ctx.strokeStyle = '#e8590c';
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    };
+
+    // Handle drags on connectors: endpoint snapping, waypoints, bow, label slide.
+    let insertedAt = -1;
+    setConnectorEditHook((obj, handle: ConnectorHandle, p, e) => {
+      useCanvasStore.getState().setInteracting(true);
+      interactingRef.current = true;
+      const m = obj.model;
+      const scene = connectorScene();
+      switch (handle.kind) {
+        case 'start':
+        case 'end': {
+          const elements = sortByZ(useBoardStore.getState().board?.elements ?? []);
+          const snap = snapEnd(p, elements, scene, { zoom: canvas.getZoom(), exclude: obj.connectorId, disabled: (e as MouseEvent).altKey });
+          magnetRef.current = snap.elementId ? { targetId: snap.elementId, side: snap.side } : null;
+          m[handle.kind] = { elementId: snap.elementId, anchor: snap.anchor, point: snap.point };
+          break;
+        }
+        case 'waypoint':
+          m.waypoints[handle.index] = p;
+          break;
+        case 'insert':
+          if (insertedAt < 0) {
+            m.waypoints.splice(handle.index, 0, p);
+            insertedAt = handle.index;
+          } else {
+            m.waypoints[insertedAt] = p;
+          }
+          break;
+        case 'bend': {
+          // Bow so the curve's midpoint follows the pointer.
+          const flat = computeConnectorPath({ ...m, bend: 0 }, scene, obj.connectorId);
+          const mid = pointAt(flat, 0.5).point;
+          const chord = { x: flat.end.x - flat.start.x, y: flat.end.y - flat.start.y };
+          const l = Math.hypot(chord.x, chord.y) || 1;
+          m.bend = ((p.x - mid.x) * -chord.y + (p.y - mid.y) * chord.x) / l;
+          break;
+        }
+        case 'label':
+          m.labelT = Math.min(0.95, Math.max(0.05, nearestOnPath(obj.path, p).t));
+          break;
+      }
+      obj.recompute(scene, { keepControls: true });
+      canvas.requestRenderAll();
+    });
+    const resetConnectorDrag = () => {
+      insertedAt = -1;
+    };
 
     const previewTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const detachPreview = onElementPreview((p) => {
@@ -389,6 +657,9 @@ export default function CanvasStage() {
       const e = opt.e as WheelEvent;
       e.preventDefault();
       e.stopPropagation();
+      stopInertia();
+      store.cancelAnimation();
+      useUIStore.getState().setFollowing(null);
 
       const rect = host.getBoundingClientRect();
       if (e.ctrlKey || e.metaKey) {
@@ -438,7 +709,52 @@ export default function CanvasStage() {
     /* Pointer                                                         */
     /* -------------------------------------------------------------- */
 
+    // Hand-pan inertia: release with momentum, decays smoothly.
+    let panSamples: Array<{ x: number; y: number; t: number }> = [];
+    let inertiaFrame: number | null = null;
+    const stopInertia = () => {
+      if (inertiaFrame !== null) cancelAnimationFrame(inertiaFrame);
+      inertiaFrame = null;
+    };
+    const startInertia = () => {
+      const recent = panSamples.filter((p) => performance.now() - p.t < 80);
+      panSamples = [];
+      if (recent.length < 2) return;
+      const a = recent[0]!;
+      const b = recent[recent.length - 1]!;
+      const dt = Math.max(1, b.t - a.t);
+      let vx = (b.x - a.x) / dt;
+      let vy = (b.y - a.y) / dt;
+      if (Math.hypot(vx, vy) < 0.25) return;
+      let last = performance.now();
+      const step = (now: number) => {
+        const elapsed = now - last;
+        last = now;
+        const decay = Math.pow(0.94, elapsed / 16);
+        vx *= decay;
+        vy *= decay;
+        store.panBy(vx * elapsed, vy * elapsed);
+        inertiaFrame = Math.hypot(vx, vy) > 0.02 ? requestAnimationFrame(step) : null;
+      };
+      inertiaFrame = requestAnimationFrame(step);
+    };
+
+    let lastLaserSentAt = 0;
+    const selfLaserId = 'self';
+    const laserAt = (p: { x: number; y: number }, start: boolean) => {
+      const me = usePresenceStore.getState().users.find((u) => u.isLocal);
+      addLaserPoint(selfLaserId, me?.color ?? '#ef4444', p, undefined, start);
+      const now = performance.now();
+      if (start || now - lastLaserSentAt > 16) {
+        lastLaserSentAt = now;
+        sendLaserPoint({ x: p.x, y: p.y, ...(start ? { start: true } : {}) });
+      }
+    };
+
     const onMouseDown = (opt: TPointerEventInfo<TPointerEvent>) => {
+      stopInertia();
+      store.cancelAnimation();
+      useUIStore.getState().setFollowing(null);
       const e = opt.e as MouseEvent;
       const pointer = opt.scenePoint;
       const activeTool = useToolStore.getState().tool;
@@ -460,8 +776,16 @@ export default function CanvasStage() {
 
       lastClickRef.current = { x: pointer.x, y: pointer.y };
 
+      if (activeTool === 'laser' && !shouldPan(e)) {
+        interactingRef.current = false;
+        laserDownRef.current = true;
+        laserAt(pointer, true);
+        return;
+      }
+
       if (shouldPan(e)) {
         interactingRef.current = false;
+        panSamples = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
         panningRef.current = { lastX: e.clientX, lastY: e.clientY };
         canvas.selection = false;
         canvas.defaultCursor = CURSOR.grabbing;
@@ -570,7 +894,14 @@ export default function CanvasStage() {
         const dx = e.clientX - lastX;
         const dy = e.clientY - lastY;
         panningRef.current = { lastX: e.clientX, lastY: e.clientY };
+        panSamples.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+        if (panSamples.length > 8) panSamples.shift();
         store.panBy(dx, dy);
+        return;
+      }
+      if (laserDownRef.current) {
+        laserAt(opt.scenePoint, false);
+        broadcastCursor(opt);
         return;
       }
       if (selectionBoxRef.current && selectionOriginRef.current) {
@@ -584,6 +915,11 @@ export default function CanvasStage() {
         });
         canvas.requestRenderAll();
       } else if (drawingRef.current) {
+        if (drawingRef.current.kind === 'arrow' || drawingRef.current.kind === 'line') {
+          const elements = sortByZ(useBoardStore.getState().board?.elements ?? []);
+          const snap = snapEnd(opt.scenePoint, elements, connectorScene(), { zoom: canvas.getZoom(), disabled: (opt.e as MouseEvent).altKey });
+          magnetRef.current = snap.elementId ? { targetId: snap.elementId, side: snap.side } : null;
+        }
         const gridVisible = useCanvasStore.getState().gridVisible;
         const dims = updateDrawing(canvas, drawingRef.current, opt.scenePoint, {
           shift: shiftDownRef.current,
@@ -607,11 +943,20 @@ export default function CanvasStage() {
     const onMouseUp = (opt: TPointerEventInfo<TPointerEvent>) => {
       hideDims();
       interactingRef.current = false;
+      laserDownRef.current = false;
+      useCanvasStore.getState().setInteracting(false);
+      resetConnectorDrag();
+      if (guidesRef.current.length || magnetRef.current) {
+        guidesRef.current = [];
+        magnetRef.current = null;
+        canvas.requestRenderAll();
+      }
       const activeTool = useToolStore.getState().tool;
       if (panningRef.current) {
         panningRef.current = null;
+        startInertia();
         canvas.selection = activeTool === 'select' && useBoardStore.getState().canEdit;
-        canvas.skipTargetFind = activeTool === 'hand';
+        canvas.skipTargetFind = activeTool !== 'select';
         setCursorsForTool(canvas, activeTool);
         canvas.requestRenderAll();
         return;
@@ -662,6 +1007,34 @@ export default function CanvasStage() {
           snapGrid: gridVisible,
         });
         drawingRef.current = null;
+        if (el && (el.kind === 'line' || el.kind === 'arrow') && el.points) {
+          // Snap both ends magnetically; choose the routing (auto: elbow
+          // between two shapes, straight otherwise) and route it.
+          const elements = sortByZ(useBoardStore.getState().board?.elements ?? []);
+          const scene = connectorScene();
+          const alt = (opt.e as MouseEvent).altKey;
+          const [x1, y1, x2, y2] = el.points as [number, number, number, number];
+          const zoom = canvas.getZoom();
+          const s0 = snapEnd({ x: x1, y: y1 }, elements, scene, { zoom, disabled: alt });
+          const e0 = snapEnd({ x: x2, y: y2 }, elements, scene, { zoom, disabled: alt });
+          const pref = useToolStore.getState().connectorRouting;
+          // The drag preview is an accent dashed line; the connector itself
+          // uses the regular connector style.
+          el.stroke = CANVAS_COLORS.lineStroke;
+          el.strokeWidth = 1.75;
+          el.strokeStyle = undefined;
+          const model: ConnectorModel = {
+            ...readConnector(el),
+            routing: pref === 'auto' ? (s0.elementId && e0.elementId ? 'elbow' : 'straight') : pref,
+            start: { elementId: s0.elementId, anchor: s0.anchor, point: s0.point },
+            end: { elementId: e0.elementId, anchor: e0.anchor, point: e0.point },
+          };
+          const path = computeConnectorPath(model, scene, el.id);
+          model.start.point = path.start;
+          model.end.point = path.end;
+          Object.assign(el, connectorPatch(model));
+        }
+        magnetRef.current = null;
         if (el) {
           // endDrawing already removed the temp object; materialize the final element.
           const finalObj = materializeElement(el);
@@ -685,13 +1058,96 @@ export default function CanvasStage() {
       asVB(opt.path).data = { id: uid('el'), kind: 'pen' };
       const el = serializeElement(opt.path);
       if (!el) return;
-      el.stroke = useToolStore.getState().penColor;
-      el.strokeWidth = useToolStore.getState().penWidth;
-      const obj = materializeElement(el);
+      const { penColor, penWidth, penMode, autoShape } = useToolStore.getState();
+      const highlighter = penMode === 'highlighter';
+      el.stroke = penColor;
+      el.strokeWidth = highlighter ? penWidth * 4 : penWidth;
+      if (highlighter) el.opacity = 0.35;
       canvas.remove(opt.path);
+
+      // QuickShape: holding still before releasing (or auto-shape mode)
+      // turns a recognizable stroke into a clean line / circle / rectangle.
+      const held = performance.now() - lastInkMoveRef.current > 450;
+      const shape = !highlighter && (held || autoShape) && el.points ? recognizeStroke(el.points) : null;
+      if (shape) {
+        const base = {
+          id: uid('el'),
+          rotation: 0,
+          fill: 'transparent',
+          stroke: penColor,
+          strokeWidth: Math.max(1.5, penWidth),
+          content: '',
+          version: 0,
+        };
+        const clean: BoardElement =
+          shape.kind === 'line'
+            ? {
+                ...base,
+                kind: 'line',
+                x: Math.min(shape.points[0], shape.points[2]),
+                y: Math.min(shape.points[1], shape.points[3]),
+                width: Math.abs(shape.points[2] - shape.points[0]),
+                height: Math.abs(shape.points[3] - shape.points[1]),
+                points: shape.points,
+                pointsAbsolute: true,
+              }
+            : { ...base, kind: shape.kind, x: shape.box.x, y: shape.box.y, width: shape.box.w, height: shape.box.h, radius: 6 };
+        const obj = materializeElement(clean);
+        canvas.add(obj);
+        animateElementIn(obj);
+        commitLocalCreate(clean, obj);
+        toast(`Snapped to ${shape.kind === 'rect' ? 'rectangle' : shape.kind}`, {
+          id: 'vb-quickshape',
+          duration: 2500,
+          action: { label: 'Undo', onClick: () => useBoardStore.getState().undo() },
+        });
+        return;
+      }
+
+      const obj = materializeElement(el);
       canvas.add(obj);
       animateElementIn(obj);
       commitLocalCreate(el, obj);
+    };
+
+    const onEditLabelRequest = () => {
+      const active = canvas.getActiveObject();
+      if (active) startLabelEditRef.current(active);
+    };
+    window.addEventListener('vb:edit-label', onEditLabelRequest);
+
+    const startConnectorLabelEdit = (obj: ConnectorShape, t: number) => {
+      const { point } = pointAt(obj.path, t);
+      setLabelEdit({
+        id: obj.connectorId,
+        box: { x: point.x - 100, y: point.y - 16, w: 200, h: 32 },
+        value: obj.model.label,
+        fontSize: 12,
+        color: themeInk('#1b1a17') ?? '#1b1a17',
+        circle: false,
+        connectorT: t,
+      });
+    };
+
+    startLabelEditRef.current = (obj: FabricObject) => {
+      if (obj instanceof ConnectorShape) {
+        startConnectorLabelEdit(obj, obj.model.labelT);
+        return;
+      }
+      const id = elementId(obj);
+      if (!id || !isLabelled(obj)) return;
+      const b = obj.getBoundingRect();
+      obj.labelHidden = true;
+      obj.set('dirty', true);
+      canvas.requestRenderAll();
+      setLabelEdit({
+        id,
+        box: { x: b.left, y: b.top, w: b.width, h: b.height },
+        value: obj.label,
+        fontSize: obj.labelSize,
+        color: obj.labelColor,
+        circle: elementKind(obj) === 'circle',
+      });
     };
 
     const onSelection = () => {
@@ -730,8 +1186,8 @@ export default function CanvasStage() {
           const el = serializeElement(obj);
           const id = elementId(obj);
           if (!el || !id) continue;
-          const { x, y, width, height, rotation, scaleX, scaleY, points, pointsToPath } = el;
-          commitLocalUpdate(id, {
+          const { x, y, width, height, rotation, scaleX, scaleY, points, pointsToPath, pointsAbsolute } = el;
+          const patch: Partial<BoardElement> = {
             x,
             y,
             width,
@@ -741,7 +1197,19 @@ export default function CanvasStage() {
             scaleY,
             ...(points ? { points } : {}),
             ...(pointsToPath ? { pointsToPath } : {}),
-          });
+            ...(pointsAbsolute ? { pointsAbsolute } : {}),
+          };
+          if (obj instanceof ConnectorShape) {
+            // Waypoints dragged back into line with their neighbours disappear.
+            const model = obj.bakedModel();
+            if (model.routing === 'straight' && model.waypoints.length) {
+              const pts = [model.start.point, ...model.waypoints, model.end.point];
+              model.waypoints = model.waypoints.filter((w, i) => !isRedundantWaypoint(pts[i]!, w, pts[i + 2]!));
+            }
+            commitLocalUpdate(id, connectorPatch(model));
+            continue;
+          }
+          commitLocalUpdate(id, patch);
         }
         commitHistory();
         if (isMulti) canvas.setActiveObject(new ActiveSelection(objects, { canvas }));
@@ -818,6 +1286,16 @@ export default function CanvasStage() {
         canvas.requestRenderAll();
       }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') shiftDownRef.current = true;
+      if (e.key === 'Enter' && !typing && !editingRef.current) {
+        const active = canvas.getActiveObject();
+        if ((isLabelled(active) || active instanceof ConnectorShape) && useBoardStore.getState().canEdit) {
+          e.preventDefault();
+          startLabelEditRef.current(active);
+        }
+      }
+    };
+    const onPointerMove = () => {
+      if (canvas.isDrawingMode) lastInkMoveRef.current = performance.now();
     };
     // Keys released while the window is unfocused never fire keyup.
     const onBlur = () => {
@@ -825,9 +1303,75 @@ export default function CanvasStage() {
       shiftDownRef.current = false;
     };
 
+    const onHoverIn = (opt: { target?: FabricObject }) => {
+      if (opt.target instanceof ConnectorShape) {
+        opt.target.hovered = true;
+        canvas.requestRenderAll();
+      }
+    };
+    const onHoverOut = (opt: { target?: FabricObject }) => {
+      if (opt.target instanceof ConnectorShape) {
+        opt.target.hovered = false;
+        canvas.requestRenderAll();
+      }
+    };
+
+    // Animated flow ("marching ants") — ticks only while an animated
+    // connector is visible.
+    let flowFrame: number | null = null;
+    let lastFlow = 0;
+    const flowTick = (now: number) => {
+      const dt = lastFlow ? Math.min(64, now - lastFlow) : 16;
+      lastFlow = now;
+      let any = false;
+      for (const o of canvas.getObjects()) {
+        if (o instanceof ConnectorShape && o.model.animated && o.isOnScreen()) {
+          o.flowOffset = (o.flowOffset + dt * 0.035) % 1000;
+          any = true;
+        }
+      }
+      if (any) canvas.requestRenderAll();
+      flowFrame = any ? requestAnimationFrame(flowTick) : null;
+      if (!any) lastFlow = 0;
+    };
+    const ensureFlow = () => {
+      if (flowFrame === null && canvas.getObjects().some((o) => o instanceof ConnectorShape && o.model.animated)) {
+        flowFrame = requestAnimationFrame(flowTick);
+      }
+    };
+    const stopFlow = () => {
+      if (flowFrame !== null) cancelAnimationFrame(flowFrame);
+      flowFrame = null;
+    };
+    ensureFlowRef.current = ensureFlow;
+
     const onDoubleClick = (opt: TPointerEventInfo<TPointerEvent>) => {
       const target = opt.target;
       if (!target || !useBoardStore.getState().canEdit) return;
+
+      if (isLabelled(target)) {
+        startLabelEditRef.current(target);
+        return;
+      }
+
+      if (target instanceof ConnectorShape) {
+        const p = opt.scenePoint;
+        const hit = nearestOnPath(target.path, p);
+        const m = target.model;
+        const labelPt = m.label ? pointAt(target.path, m.labelT).point : null;
+        if (labelPt && Math.hypot(labelPt.x - p.x, labelPt.y - p.y) < 24) {
+          startConnectorLabelEdit(target, m.labelT);
+        } else if (m.routing !== 'elbow' && !target.path.selfLoop) {
+          // Double-click a line to add a waypoint there.
+          const model = target.bakedModel();
+          model.waypoints.splice(Math.min(hit.span, model.waypoints.length), 0, hit.point);
+          useBoardStore.getState().commitHistory();
+          useBoardStore.getState().updateElement(target.connectorId, connectorPatch(model));
+        } else {
+          startConnectorLabelEdit(target, Math.min(0.95, Math.max(0.05, hit.t)));
+        }
+        return;
+      }
 
       if (target instanceof IText) {
         if (!target.isEditing) {
@@ -895,8 +1439,12 @@ export default function CanvasStage() {
     canvas.on('text:changed', onTextChanged);
     canvas.on('text:editing:entered', onTextEditingEntered);
     canvas.on('text:editing:exited', onTextEditingExited);
+    canvas.on('after:render', onAfterRender);
+    canvas.on('mouse:over', onHoverIn);
+    canvas.on('mouse:out', onHoverOut);
 
     window.addEventListener('keydown', onKeyDown);
+    host.addEventListener('pointermove', onPointerMove, { capture: true });
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
     host.addEventListener('dragover', onDragOver);
@@ -922,7 +1470,15 @@ export default function CanvasStage() {
       canvas.off('text:changed', onTextChanged);
       canvas.off('text:editing:entered', onTextEditingEntered);
       canvas.off('text:editing:exited', onTextEditingExited);
+      canvas.off('after:render', onAfterRender);
+      canvas.off('mouse:over', onHoverIn);
+      canvas.off('mouse:out', onHoverOut);
+      setConnectorEditHook(null);
+      stopFlow();
+      window.removeEventListener('vb:edit-label', onEditLabelRequest);
+      stopInertia();
       window.removeEventListener('keydown', onKeyDown);
+      host.removeEventListener('pointermove', onPointerMove, { capture: true });
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
       host.removeEventListener('dragover', onDragOver);
@@ -1135,6 +1691,39 @@ export default function CanvasStage() {
     let lastBoardId: string | null = null;
     let lastCanEdit: boolean | null = null;
 
+    /**
+     * Keeps bound connectors attached after any shape change (drag, arrange,
+     * undo, a collaborator's edit). Routing is deterministic, so every client
+     * computes the same result and only the first one writes anything.
+     */
+    let maintenanceQueued = false;
+    const maintainConnectors = () => {
+      maintenanceQueued = false;
+      const { board, canEdit, isDemo } = useBoardStore.getState();
+      if (!board || (!canEdit && !isDemo) || useCanvasStore.getState().interacting) return;
+      const scene = connectorScene();
+      for (const el of board.elements) {
+        if ((el.kind !== 'line' && el.kind !== 'arrow') || (!el.startBinding && !el.endBinding)) continue;
+        const model = readConnector(el);
+        const { start, end } = resolveEnds(model, scene);
+        const pts = [start.point.x, start.point.y, end.point.x, end.point.y];
+        if (!el.points) continue;
+        const drift = Math.max(...pts.map((v, i) => Math.abs(v - (el.points![i] ?? 0))));
+        if (drift < 0.5) continue;
+        model.start.point = start.point;
+        model.end.point = end.point;
+        const patch = connectorPatch(model);
+        useBoardStore.getState().applyDerivedUpdate(el.id, {
+          points: patch.points,
+          pointsAbsolute: true,
+          x: patch.x,
+          y: patch.y,
+          width: patch.width,
+          height: patch.height,
+        });
+      }
+    };
+
     const run = () => {
       const { board, revision, canEdit } = useBoardStore.getState();
       const canvas = useCanvasStore.getState().canvas;
@@ -1145,12 +1734,23 @@ export default function CanvasStage() {
       lastCanEdit = canEdit;
       lastBoardId = board.id;
       reconcileRef.current(full);
-      if (boardChanged) fitBoardToView(canvas);
+      if (boardChanged) useCanvasStore.getState().fitBox(unionBox(board.elements.map(elementBox)));
       useCanvasStore.getState().setReady(true);
+      if (!maintenanceQueued) {
+        maintenanceQueued = true;
+        setTimeout(maintainConnectors, 0);
+      }
     };
+    // Re-check once a drag ends (maintenance is paused while interacting).
+    const unsubscribeInteracting = useCanvasStore.subscribe((s, prev) => {
+      if (prev.interacting && !s.interacting && !maintenanceQueued) {
+        maintenanceQueued = true;
+        setTimeout(maintainConnectors, 0);
+      }
+    });
 
     run();
-    return useBoardStore.subscribe((state, prev) => {
+    const unsubscribeBoard = useBoardStore.subscribe((state, prev) => {
       if (
         state.board?.elements === prev.board?.elements &&
         state.revision === prev.revision &&
@@ -1161,7 +1761,72 @@ export default function CanvasStage() {
       }
       run();
     });
+    return () => {
+      unsubscribeBoard();
+      unsubscribeInteracting();
+    };
   }, []);
+
+  // ----- theme change: re-render theme-adaptive ink ----------------------------
+  useEffect(
+    () =>
+      useThemeStore.subscribe((state, prev) => {
+        if (state.theme !== prev.theme) requestAnimationFrame(() => reconcileRef.current(true));
+      }),
+    [],
+  );
+
+  // ----- follow a collaborator's pointer ------------------------------------
+  useEffect(() => {
+    let lastTarget = '';
+    return usePresenceStore.subscribe((state) => {
+      const followingId = useUIStore.getState().followingId;
+      if (!followingId) return;
+      const user = state.users.find((u) => u.id === followingId);
+      if (!user) {
+        useUIStore.getState().setFollowing(null);
+        return;
+      }
+      if (!user.cursor) return;
+      const key = `${Math.round(user.cursor.x)},${Math.round(user.cursor.y)}`;
+      if (key === lastTarget) return;
+      lastTarget = key;
+      const { container, viewport, animateTo } = useCanvasStore.getState();
+      if (!container) return;
+      animateTo(
+        {
+          scale: viewport.scale,
+          x: container.clientWidth / 2 - user.cursor.x * viewport.scale,
+          y: container.clientHeight / 2 - user.cursor.y * viewport.scale,
+        },
+        320,
+      );
+    });
+  }, []);
+
+  // ----- label editor ---------------------------------------------------------
+  const commitLabel = (value: string, cancel = false) => {
+    const edit = labelEdit;
+    if (!edit) return;
+    setLabelEdit(null);
+    const obj = objectMapRef.current.get(edit.id);
+    if (obj && isLabelled(obj)) {
+      obj.labelHidden = false;
+      obj.set('dirty', true);
+      useCanvasStore.getState().canvas?.requestRenderAll();
+    }
+    if (edit.connectorT !== undefined) {
+      if (!cancel && value !== edit.value) {
+        useBoardStore.getState().updateElement(edit.id, { label: value.trim().slice(0, 200), labelT: edit.connectorT });
+        useBoardStore.getState().commitHistory();
+      }
+      return;
+    }
+    if (!cancel && value !== edit.value) {
+      useBoardStore.getState().updateElement(edit.id, { content: value.slice(0, 5000) });
+      useBoardStore.getState().commitHistory();
+    }
+  };
 
   // ----- resize ------------------------------------------------------------
   useEffect(() => {
@@ -1192,6 +1857,14 @@ export default function CanvasStage() {
         className="pointer-events-none absolute left-0 top-0 z-20 hidden rounded-md bg-ink px-2 py-1 font-mono text-[11px] font-medium text-paper shadow-lg"
         style={{ display: 'none' }}
       />
+
+      {labelEdit && (
+        <LabelEditor
+          key={labelEdit.id}
+          edit={labelEdit}
+          onCommit={(value, cancel) => commitLabel(value, cancel)}
+        />
+      )}
 
       <input
         ref={fileInputRef}
@@ -1227,48 +1900,6 @@ function findObjectAt(canvas: FabricCanvas, x: number, y: number): FabricObject 
   return null;
 }
 
-function fitBoardToView(canvas: FabricCanvas) {
-  const container = useCanvasStore.getState().container;
-  if (!container) return;
-  const objects = canvas.getObjects();
-  if (!objects.length) {
-    canvas.setViewportTransform([1, 0, 0, 1, container.clientWidth / 2, container.clientHeight / 2]);
-    useCanvasStore.getState().syncViewport();
-    return;
-  }
-
-  // Bounds in world space (getBoundingRect is viewport-independent in fabric 7).
-  const bounds = objects.reduce(
-    (acc, obj) => {
-      const b = obj.getBoundingRect();
-      return {
-        minX: Math.min(acc.minX, b.left),
-        minY: Math.min(acc.minY, b.top),
-        maxX: Math.max(acc.maxX, b.left + b.width),
-        maxY: Math.max(acc.maxY, b.top + b.height),
-      };
-    },
-    { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
-  );
-
-  const pad = 140;
-  const w = bounds.maxX - bounds.minX + pad * 2;
-  const h = bounds.maxY - bounds.minY + pad * 2;
-  const scale = Math.max(0.1, Math.min(container.clientWidth / w, container.clientHeight / h, 1));
-  const centerX = (bounds.minX + bounds.maxX) / 2;
-  const centerY = (bounds.minY + bounds.maxY) / 2;
-
-  canvas.setViewportTransform([
-    scale, 0, 0, scale,
-    container.clientWidth / 2 - centerX * scale,
-    container.clientHeight / 2 - centerY * scale,
-  ]);
-  canvas.requestRenderAll();
-  // Publish the fitted transform. (applyViewport() here used to push the
-  // stale store viewport back onto the canvas and undo the fit.)
-  useCanvasStore.getState().syncViewport();
-}
-
 function useGridStyle() {
   const viewport = useCanvasStore((s) => s.viewport);
   const size = Math.max(24 * viewport.scale, 8);
@@ -1276,4 +1907,63 @@ function useGridStyle() {
     backgroundSize: `${size}px ${size}px`,
     backgroundPosition: `${viewport.x % size}px ${viewport.y % size}px`,
   } as React.CSSProperties;
+}
+
+/** In-place editor for shape labels: a textarea laid exactly over the shape. */
+function LabelEditor({
+  edit,
+  onCommit,
+}: {
+  edit: { box: { x: number; y: number; w: number; h: number }; value: string; fontSize: number; color: string; circle: boolean };
+  onCommit: (value: string, cancel?: boolean) => void;
+}) {
+  const viewport = useCanvasStore((s) => s.viewport);
+  const [value, setValue] = useState(edit.value);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const done = useRef(false);
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  const finish = (cancel = false) => {
+    if (done.current) return;
+    done.current = true;
+    onCommit(value, cancel);
+  };
+
+  const inset = edit.circle ? (edit.box.w * (1 - Math.SQRT1_2)) / 2 : 8;
+  const left = (edit.box.x + inset) * viewport.scale + viewport.x;
+  const top = (edit.box.y + inset) * viewport.scale + viewport.y;
+  const width = Math.max(40, (edit.box.w - inset * 2) * viewport.scale);
+  const height = Math.max(24, (edit.box.h - inset * 2) * viewport.scale);
+
+  return (
+    <div
+      className="absolute z-30 flex items-center justify-center"
+      style={{ left, top, width, height }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => finish()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Escape') finish(true);
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+            e.preventDefault();
+            finish();
+          }
+        }}
+        rows={1}
+        placeholder="Label"
+        aria-label="Shape label"
+        className="max-h-full w-full resize-none overflow-hidden bg-transparent text-center font-medium leading-[1.3] outline-none placeholder:text-ink-3/60"
+        style={{ fontSize: edit.fontSize * viewport.scale, color: edit.color }}
+      />
+    </div>
+  );
 }

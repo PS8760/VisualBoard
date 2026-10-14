@@ -163,3 +163,45 @@ Tests:
 - `test/autoLayout.test.ts`: flow order and alignment, edge-to-edge routing, notes beside, anchoring, binding inference, vertical diagrams, branching, cycles, scope and lock, and long-edge curving.
 - `e2e/redesign.spec.ts`: the reported scenario end to end, including single-step undo.
 - A backend arrange-endpoint test.
+
+## 8. Smart connector engine (`frontend/src/services/connectors/`)
+
+**Audit of the previous implementation.** `ArrowLine` was a Fabric `Line` subclass:
+- Two points only, plus an optional quadratic bend.
+- One arrowhead type, no labels, and no fixed anchors (only "aim at the centre").
+- No orthogonal routing and no obstacle avoidance.
+- About 30 call sites across five files depended on it.
+
+**New architecture.**
+
+| Module | Responsibility |
+|---|---|
+| `model.ts` | Typed, relational connector model stored on the element: start/end `{elementId, anchor}` (`auto` floating / `side` fixed / `point` custom), `waypoints`, `routing` (`straight`, `curved`, `elbow`), `bend`, start/end markers, `label` + `labelT`, `animated`, style. Reads every legacy format (seed absolute points, center-relative rows, `bend`-only). |
+| `route.ts` | Pure geometry: exact perimeter anchoring (ray/box for rectangles, circles), gap-based facing-side choice, straight polylines, normal-steered cubic Béziers and Catmull-Rom splines through waypoints, **orthogonal A\*** over a sparse visibility grid of padded obstacle edges (bend penalty, U-turn ban, stubs along anchor normals, filleted corners), self-loops, arc-length sampling, nearest-point projection, SVG `d` output. |
+| `draw.ts` | Path rendering, 8 markers (none, arrow, stealth, filled/open triangle, circle, diamond, bar) with stroke clipping under filled markers, label pill, selection halo, hover glow, animated flow (dash offset). |
+| `shape.ts` | Fabric `ConnectorShape`: bounds = path bbox (culling and hit-testing stay cheap; pixel-accurate hits), dynamic handles (endpoints, waypoints, segment "+" inserts, curve bow, label slider), and a model with drag offsets baked in for persistence. |
+| `snap.ts` | Magnetic end snapping: attach within a 16px halo, lock to a side anchor within 18px, Alt to disable. |
+
+**Interaction.**
+- The connector tool picks its routing automatically: orthogonal between two shapes, straight otherwise. The last routing you chose in the toolbar becomes the default.
+- Dragging an endpoint shows a perimeter halo and anchor dots, and the snapped dot fills in.
+- Double-click on a straight or curved line adds a waypoint; on an orthogonal line it adds a label. A waypoint dragged back into line is removed.
+- Enter or the toolbar edits the label.
+- The toolbar offers routing, start/end markers (with a swap button), animated flow and reset path, plus the existing stroke, colour, layer, lock and delete actions.
+
+**Sync and performance.**
+- Geometry is derived from synced data, so every client renders the same route.
+- Endpoint drift is persisted by the existing deterministic maintenance pass. The e2e suite verifies that collaborators converge without ping-pong.
+- Live re-routing during a drag only touches connectors attached to the moving shapes.
+- After any change, only connectors attached to changed shapes, or orthogonal routes whose corridor touches them, are recomputed.
+- The flow animation runs only while an animated connector is on screen.
+
+**Not implemented.**
+- Manually dragging orthogonal (elbow) joints: those routes are automatic; use straight or curved routing to place waypoints yourself.
+- Gradient strokes and drop shadows.
+- Labels that rotate along the line: they stay upright and horizontal for readability.
+- Grouping: the app has no group primitive yet.
+
+**Tests.**
+- `test/connectors.test.ts` (12): model round-trip, anchoring, A* orthogonality and clearance, curves, waypoints, projection, self-loop, SVG.
+- `e2e/connectors.spec.ts` (3): routing around an obstacle, binding, toolbar styling and label; double-click waypoint; two-session convergence.

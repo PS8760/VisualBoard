@@ -222,7 +222,7 @@ export default function DocumentPreview() {
                 <button
                   onClick={handleDownload}
                   disabled={downloading}
-                  className="flex h-7 items-center gap-1.5 rounded-sm bg-ink px-2.5 text-[11px] font-medium text-paper transition-colors hover:bg-black disabled:opacity-60"
+                  className="flex h-7 items-center gap-1.5 rounded-sm bg-ink px-2.5 text-[11px] font-medium text-paper transition-colors hover:bg-ink-hover disabled:opacity-60"
                 >
                   {downloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
                   {downloading ? 'Downloading…' : 'Download'}

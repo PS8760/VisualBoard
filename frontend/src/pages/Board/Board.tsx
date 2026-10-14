@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { ChevronLeft } from 'lucide-react';
+import { EyeOff } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
 import TopBar from './TopBar';
 import Toolbar from './Toolbar';
 import PenToolbar from './PenToolbar';
@@ -30,7 +31,13 @@ import { attachRealtimeListeners, pendingCount } from '../../services/realtime';
 import { fetchBoard } from '../../api/board.api';
 import { INITIAL_ELEMENTS } from './boardSeeds';
 import { uid } from '../../utils';
+import { bindableAt } from '../../services/geometry';
 import BoardSettingsModal from './BoardSettingsModal';
+import SelectionToolbar from './SelectionToolbar';
+import NavigationDock from './NavigationDock';
+import LaserOverlay from './LaserOverlay';
+import DiffOverlay from './DiffOverlay';
+import { fitToContent, zoomAroundCenter } from '../../services/viewport';
 import type { Tool } from '../../types';
 
 const TOOL_KEYS: Record<string, Tool> = {
@@ -44,6 +51,7 @@ const TOOL_KEYS: Record<string, Tool> = {
   t: 'text',
   s: 'sticky',
   c: 'comment',
+  k: 'laser',
   // Advertised in the toolbar tooltips but previously never bound.
   i: 'image',
   d: 'document',
@@ -60,7 +68,6 @@ export default function Board() {
   const load = useBoardStore((s) => s.load);
   const setTool = useToolStore((s) => s.setTool);
   const setCommandPalette = useUIStore((s) => s.setCommandPalette);
-  const setRightPanel = useUIStore((s) => s.setRightPanel);
   const setRightPanelTab = useUIStore((s) => s.setRightPanelTab);
 
   // Keep the header in sync when the settings modal renames the board. Only
@@ -137,7 +144,18 @@ export default function Board() {
     const store = useBoardStore.getState();
     // Element ids are global primary keys: fresh ids per board, or only the
     // very first board ever created could receive the starter content.
-    INITIAL_ELEMENTS.forEach((el) => store.addElement({ ...el, id: uid('el'), version: 0 }));
+    const seeded = INITIAL_ELEMENTS.map((el) => ({ ...el, id: uid('el'), version: 0 }));
+    // Attach the starter arrows to the boxes they connect so they follow them.
+    for (const el of seeded) {
+      if ((el.kind !== 'arrow' && el.kind !== 'line') || !el.points) continue;
+      const [x1, y1, x2, y2] = el.points as [number, number, number, number];
+      const start = bindableAt(seeded, { x: x1, y: y1 }, 14);
+      const end = bindableAt(seeded, { x: x2, y: y2 }, 14);
+      el.pointsAbsolute = true;
+      if (start) el.startBinding = { elementId: start.id };
+      if (end) el.endBinding = { elementId: end.id };
+    }
+    seeded.forEach((el) => store.addElement(el));
     store.commitHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board?.id, board?.elements.length]);
@@ -185,6 +203,8 @@ export default function Board() {
           useUIStore.getState().setCommandPalette(false);
           useUIStore.getState().setVersionTimeline(false);
           useUIStore.getState().setActiveComment(null);
+          useUIStore.getState().setZen(false);
+          useUIStore.getState().setFollowing(null);
         },
       },
       { key: 'a', shift: true, skipWhenTyping: true, handler: () => document.getElementById('arrange-button')?.click() },
@@ -263,60 +283,90 @@ export default function Board() {
         },
       },
       // Zoom presets
-      { key: '1', skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomTo(1) },
-      { key: '2', skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomTo(0.5) },
-      { key: '3', skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomTo(2) },
-      { key: '0', skipWhenTyping: true, handler: () => useCanvasStore.getState().resetView() },
-      // Zoom in/out with keyboard
-      { key: '=', meta: true, skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomBy(1.2) },
-      { key: '=', ctrl: true, skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomBy(1.2) },
-      { key: '-', meta: true, skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomBy(0.8) },
-      { key: '-', ctrl: true, skipWhenTyping: true, handler: () => useCanvasStore.getState().zoomBy(0.8) },
+      { key: '1', skipWhenTyping: true, handler: () => zoomAroundCenter(1) },
+      { key: '2', skipWhenTyping: true, handler: () => zoomAroundCenter(0.5) },
+      { key: '3', skipWhenTyping: true, handler: () => zoomAroundCenter(2) },
+      { key: '0', skipWhenTyping: true, handler: fitToContent },
+      // Zoom in/out with keyboard (animated, around the screen center)
+      ...(['meta', 'ctrl'] as const).flatMap((mod) => [
+        { key: '=', [mod]: true, skipWhenTyping: true, handler: () => zoomAroundCenter(useCanvasStore.getState().viewport.scale * 1.25) },
+        { key: '-', [mod]: true, skipWhenTyping: true, handler: () => zoomAroundCenter(useCanvasStore.getState().viewport.scale / 1.25) },
+        { key: '.', [mod]: true, skipWhenTyping: true, handler: () => useUIStore.getState().setZen(!useUIStore.getState().zen) },
+        { key: ']', [mod]: true, skipWhenTyping: true, handler: () => useBoardStore.getState().reorder(useBoardStore.getState().selectedIds, 'front') },
+        { key: '[', [mod]: true, skipWhenTyping: true, handler: () => useBoardStore.getState().reorder(useBoardStore.getState().selectedIds, 'back') },
+        { key: 'y', [mod]: true, skipWhenTyping: true, handler: () => useBoardStore.getState().redo() },
+        {
+          key: 'l',
+          [mod]: true,
+          skipWhenTyping: true,
+          handler: () => {
+            const { selectedIds, board, setLocked } = useBoardStore.getState();
+            if (!selectedIds.length || !board) return;
+            const allLocked = board.elements.filter((el) => selectedIds.includes(el.id)).every((el) => el.locked);
+            setLocked(selectedIds, !allLocked);
+          },
+        },
+      ]),
+      { key: '!', shift: true, skipWhenTyping: true, handler: fitToContent },
+      { key: 'm', skipWhenTyping: true, handler: () => useUIStore.getState().setMinimapVisible(!useUIStore.getState().minimapVisible) },
+      { key: '?', shift: true, skipWhenTyping: true, handler: () => window.dispatchEvent(new Event('vb:open-help')) },
     ],
     [boardId, setTool, setCommandPalette],
   );
 
   const panelOpen = useUIStore((s) => s.rightPanelOpen);
+  const zen = useUIStore((s) => s.zen);
   const tool = useToolStore((s) => s.tool);
 
   return (
-    <div className="flex h-screen flex-col overflow-clip bg-paper text-ink">
-      <TopBar onOpenSettings={() => setSettingsOpen(true)} />
-      <div className="relative flex flex-1 overflow-hidden">
-        <Toolbar />
-        {tool === 'pen' && <PenToolbar />}
-        <div className="relative flex-1 overflow-hidden">
-          <CanvasStage />
-          <CursorsOverlay />
-          <ElementOverlays />
-          <ConnectionBanner />
-          <ArrangeBadge />
-          <ArrangeAnalyzing />
-          <VersionTimeline />
-
-          {loading && (
-            <div className="absolute inset-0 z-30 bg-paper">
-              <CanvasSkeleton />
-            </div>
-          )}
-
-          <div className="absolute right-0 top-1/2 z-20 -translate-y-1/2">
-            {!panelOpen && (
-              <button
-                onClick={() => setRightPanel(true)}
-                className="flex h-12 w-5 items-center justify-center rounded-l-md border border-r-0 border-line-2 bg-paper text-ink-3 shadow-xs transition-colors hover:text-ink"
-                aria-label="Open panel"
-                data-tour="panel"
-              >
-                <ChevronLeft size={12} className="-scale-x-100" />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {panelOpen && <RightPanel />}
+    <div className="relative h-screen overflow-clip bg-board text-ink">
+      {/* Full-bleed canvas; every control floats above it. */}
+      <div className="absolute inset-0">
+        <CanvasStage />
       </div>
-      <StatusBar />
+      <CursorsOverlay />
+      <ElementOverlays />
+      <DiffOverlay />
+      <LaserOverlay />
+      <SelectionToolbar />
+      <FollowFrame />
+
+      {!zen && (
+        <>
+          <TopBar onOpenSettings={() => setSettingsOpen(true)} />
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex flex-col items-center gap-2 px-4">
+            <AnimatePresence>{tool === 'pen' && <PenToolbar key="pen" />}</AnimatePresence>
+            <Toolbar />
+          </div>
+          <div className="pointer-events-none absolute bottom-4 left-4 z-30 hidden md:block">
+            <StatusBar />
+          </div>
+          <div className="pointer-events-none absolute bottom-4 right-4 z-30 hidden lg:block">
+            <NavigationDock />
+          </div>
+          <AnimatePresence>{panelOpen && <RightPanel />}</AnimatePresence>
+        </>
+      )}
+      {zen && (
+        <button
+          onClick={() => useUIStore.getState().setZen(false)}
+          className="glass absolute right-4 top-4 z-30 flex h-9 items-center gap-2 rounded-full px-3.5 text-[12px] font-medium text-ink-2 transition-colors hover:text-ink"
+        >
+          <EyeOff size={14} /> Exit zen <kbd className="font-mono text-[10px] text-ink-3">Esc</kbd>
+        </button>
+      )}
+
+      <ConnectionBanner />
+      <ArrangeBadge />
+      <ArrangeAnalyzing />
+      <VersionTimeline />
+
+      {loading && (
+        <div className="absolute inset-0 z-40 bg-paper">
+          <CanvasSkeleton />
+        </div>
+      )}
+
       <CommandPalette />
       <DocumentPreview />
       <OnboardingOverlay />
@@ -332,6 +382,27 @@ export default function Board() {
         aria-hidden="true"
         tabIndex={-1}
       />
+    </div>
+  );
+}
+
+/** Colored frame + label while following a collaborator's pointer. */
+function FollowFrame() {
+  const followingId = useUIStore((s) => s.followingId);
+  const user = usePresenceStore((s) => s.users.find((u) => u.id === followingId));
+  if (!followingId || !user) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 z-40" style={{ boxShadow: `inset 0 0 0 3px ${user.color}` }}>
+      <div className="absolute left-1/2 top-3 -translate-x-1/2">
+        <button
+          className="pointer-events-auto flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] font-semibold text-white shadow-lg"
+          style={{ background: user.color }}
+          onClick={() => useUIStore.getState().setFollowing(null)}
+        >
+          Following {user.name}
+          <span className="rounded-full bg-white/25 px-1.5 font-mono text-[10px]">Esc to stop</span>
+        </button>
+      </div>
     </div>
   );
 }

@@ -35,7 +35,7 @@ export default function RightPanel() {
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 16 }}
       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-      className="flex w-[300px] shrink-0 flex-col border-l border-line bg-paper"
+      className="glass pointer-events-auto absolute bottom-[84px] right-3 top-[68px] z-30 flex w-[320px] flex-col overflow-hidden rounded-2xl"
       aria-label="Board panel"
       data-tour="panel"
     >
@@ -358,7 +358,7 @@ function CommentsPanel() {
         />
         <button
           onClick={post}
-          className="h-8 rounded-sm bg-ink px-3 text-[11.5px] font-medium text-paper transition-colors hover:bg-black"
+          className="h-8 rounded-sm bg-ink px-3 text-[11.5px] font-medium text-paper transition-colors hover:bg-ink-hover"
         >
           Post
         </button>
@@ -470,7 +470,7 @@ function SuggestionsPanel() {
           <button
             onClick={runAi}
             disabled={aiState === 'loading'}
-            className="mt-2 flex h-7 w-full items-center justify-center gap-1.5 rounded-sm bg-ink text-[11px] font-medium text-paper transition-colors hover:bg-black disabled:opacity-60"
+            className="mt-2 flex h-7 w-full items-center justify-center gap-1.5 rounded-sm bg-ink text-[11px] font-medium text-paper transition-colors hover:bg-ink-hover disabled:opacity-60"
           >
             {aiState === 'loading' ? (
               <>
@@ -552,7 +552,7 @@ function SuggestionsPanel() {
               <div className="mt-2.5 flex gap-1.5">
                 <button
                   onClick={() => applySuggestion(s.id)}
-                  className="flex h-6 flex-1 items-center justify-center gap-1 rounded-sm bg-ink text-[10.5px] font-medium text-paper transition-colors hover:bg-black"
+                  className="flex h-6 flex-1 items-center justify-center gap-1 rounded-sm bg-ink text-[10.5px] font-medium text-paper transition-colors hover:bg-ink-hover"
                 >
                   <Check size={10} /> Apply
                 </button>
