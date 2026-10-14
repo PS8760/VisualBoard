@@ -55,6 +55,7 @@ export const TOOL_LABEL: Record<Tool, string> = {
   image: 'Image',
   document: 'Document',
   comment: 'Comment',
+  laser: 'Laser pointer',
 };
 
 export const ELEMENT_LABEL: Record<ElementKind, string> = {

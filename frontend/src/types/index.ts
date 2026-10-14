@@ -28,7 +28,8 @@ export type Tool =
   | 'sticky'
   | 'image'
   | 'document'
-  | 'comment';
+  | 'comment'
+  | 'laser';
 
 export type ElementKind =
   | 'rect'
@@ -49,6 +50,12 @@ export interface AttachmentMeta {
   size: number;
   uploadedAt: string;
   url?: string;
+}
+
+/** Attachment of a connector end to a shape, with an optional fixed anchor. */
+export interface ConnectorBinding {
+  elementId: string;
+  anchor?: { type: 'auto' } | { type: 'side'; side: 'top' | 'right' | 'bottom' | 'left' } | { type: 'point'; nx: number; ny: number };
 }
 
 export interface BoardElement {
@@ -72,6 +79,32 @@ export interface BoardElement {
   points?: number[];
   pointsToPath?: string;
   attachment?: AttachmentMeta | null;
+  /** solid | dashed | dotted stroke. */
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
+  /** Line/arrow endpoints are absolute scene coordinates (x/y/width/height are their bbox). */
+  pointsAbsolute?: boolean;
+  /** Connector curvature: px the curve bows off the straight chord at its midpoint (0 = straight). */
+  bend?: number;
+  /** Connector ends attached to shapes; they follow the shape when it moves. */
+  startBinding?: ConnectorBinding | null;
+  endBinding?: ConnectorBinding | null;
+  /** Connector routing mode (default straight; legacy `bend` implies curved). */
+  routing?: 'straight' | 'curved' | 'elbow';
+  /** Connector control points as a flat [x0,y0,x1,y1,…] list (straight & curved routes). */
+  waypoints?: number[];
+  startMarker?: string;
+  endMarker?: string;
+  /** Marching-ants flow animation along the connector. */
+  animated?: boolean;
+  /** Connector mid-line label and its position along the path (0..1). */
+  label?: string;
+  labelT?: number;
+  /** Label color for shapes. */
+  textColor?: string;
+  /** Locked elements can be selected (to unlock) but not moved or resized. */
+  locked?: boolean;
+  /** Stacking order; higher draws on top. Elements without it keep creation order. */
+  zIndex?: number;
   /** @deprecated legacy denormalized counter — counts are derived from comments. */
   commentCount?: number;
   opacity?: number;
