@@ -50,7 +50,8 @@ export function mapBoard(raw: BackendBoard): Board {
     ownerId: String(raw.owner_id),
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
-    elements: (raw.elements ?? []).map((el) => el.element_data as unknown as BoardElement),
+    // The row id is authoritative; legacy rows don't repeat it inside element_data.
+    elements: (raw.elements ?? []).map((el) => ({ ...(el.element_data as unknown as BoardElement), id: el.id })),
     members: mapMembers(raw.board_members),
   };
 }
