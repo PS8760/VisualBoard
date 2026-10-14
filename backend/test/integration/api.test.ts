@@ -629,6 +629,21 @@ beforeAll(async () => {
     });
   });
 
+  describe('arrange endpoint', () => {
+    it('moves shapes only and never treats connectors as boxes', async () => {
+      const b = await request(app).post('/api/v1/boards').set('Authorization', `Bearer ${owner.token}`).send({ title: 'Arrange' });
+      const id = b.body.data.id;
+      const mk = (element: Record<string, unknown>) =>
+        request(app).post(`/api/v1/boards/${id}/elements`).set('Authorization', `Bearer ${owner.token}`).send({ element });
+      await mk({ ...VALID_ELEMENT, id: 'arr_a', x: 0, y: 0 });
+      await mk({ ...VALID_ELEMENT, id: 'arr_b', x: 900, y: 900 });
+      await mk({ ...VALID_ELEMENT, id: 'arr_conn', kind: 'arrow', points: [0, 0, 900, 900], pointsAbsolute: true, startBinding: { elementId: 'arr_a' }, endBinding: { elementId: 'arr_b' } });
+      const res = await request(app).post(`/api/v1/boards/${id}/arrange`).set('Authorization', `Bearer ${owner.token}`);
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body.data.positions).sort()).toEqual(['arr_a', 'arr_b']);
+    });
+  });
+
   describe('board deletion', () => {
     it('deletes the board and its contents, then 404s', async () => {
       const del = await request(app)

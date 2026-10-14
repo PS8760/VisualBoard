@@ -196,6 +196,16 @@ describe('realtime collaboration', () => {
     expect((foreign!.element_data as { x: number }).x).toBe(0);
   });
 
+  it('relays laser pointer points to the room without persisting them', async () => {
+    const a = await connect(viewer.token);
+    const b = await connect(owner.token);
+    await emit(a, 'board:join', { boardId });
+    await emit(b, 'board:join', { boardId });
+    const got = next<{ id: string; x: number; y: number; start?: boolean }>(b, 'laser:point');
+    a.emit('laser:point', { boardId, x: 10, y: 20, start: true });
+    expect(await got).toMatchObject({ id: a.id, x: 10, y: 20, start: true });
+  });
+
   it('un-pins comment threads when their element is deleted', async () => {
     const a = await connect(owner.token);
     const b = await connect(editor.token);

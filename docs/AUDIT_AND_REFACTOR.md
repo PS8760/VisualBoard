@@ -34,6 +34,7 @@ Protocol reference: [`API.md`](API.md).
 | 20 | Compose hardcoded host ports 5432/6379, which clash with local installs. | Host ports and rate limits are configurable. |
 | 21 | Status-bar tooltips overflowed the board's `overflow: hidden` root, which the browser could then scroll programmatically, pushing the top bar off-screen. | The root uses `overflow: clip`. |
 | 22 | The onboarding tour was a centered modal over a full-screen blur, so it described tools it never showed. Its `highlightTool` field was unused, each step's tool switch fired one step late, it covered 4 of 12 tools, and board hotkeys (R, Delete…) still fired behind it. | It's now a spotlight tour anchored to the real UI via `data-tour` attributes, with 11 steps covering every tool, the side panel (opened for that step), history, sharing, undo and commands. The card is placed beside its target, input is blocked during the tour, it supports ←/→/Esc, and it can be replayed from Help. The advertised **I**/**D** shortcuts are now actually bound. |
+| 23 | Primary (`bg-ink`) buttons hardcoded `hover:bg-black`. In dark mode `bg-ink` is light and its text dark, so hovering turned 8+ buttons into dark-on-black at 1.16:1 contrast (Login, Create, Start Creating, Auto Arrange, Restore, Post, the tour…). | A theme token `--color-ink-hover` (black in light mode, white in dark) replaces it in the shared `Button` and all 12 call sites. `e2e/contrast.spec.ts` hovers every visible control on the main pages in both themes and fails below 3:1. |
 
 ## 2. Architecture after the refactor
 
@@ -108,3 +109,57 @@ The existing e2e specs had two harness bugs, both fixed: they passed `{ token, u
 - The outbox lives in memory. Closing the tab while offline loses queued edits; the user is warned before unload.
 - Auto-snapshot timers are per process. A crash loses only the pending checkpoint.
 - Uploads are buffered in memory (multer, 10 MB cap). Document previews are rendered on the client; the server generates no thumbnails.
+
+## 6. Spatial UI redesign (interaction model)
+
+Research inputs:
+- tldraw's context-adaptive menus and arrow-binding model (a binding record from the arrow to its target shape; arrows follow the target).
+- Procreate's QuickShape hold gesture.
+- Stylus-first patterns that put controls near the point of work.
+
+| Area | Before | After |
+|---|---|---|
+| Layout | Fixed top bar, left toolbar, footer, docked panel | Full-bleed canvas with floating glass islands: title/status, collaboration, bottom tool dock, history, navigation, and a floating panel. Zen mode (⌘.) hides all chrome. |
+| Tools | 12 flat buttons | Grouped dock with an animated active pill, a shapes flyout that remembers the last shape, and a pen flyout (pen/highlighter, colours, sizes, auto-shape). The laser pointer (K) is new. |
+| Selection | Edit everything in the side panel | A contextual toolbar above the selection, adapting to what's selected: fill and stroke colour, width, dash style, text size, edit label, front/back, duplicate, lock, comment, delete. |
+| Shapes | Rectangle content never rendered; sticky text overflowed | Labelled rectangles and circles (double-click or Enter opens an in-place editor), and wrapping sticky notes. |
+| Connectors | Free lines; their bounding box was offset | Endpoint handles, binding to shapes on draw or endpoint drop (with a target highlight), live re-routing while dragging, and a deterministic maintenance pass that keeps connectors attached after arrange, undo or remote edits. |
+| Ink | Raw strokes | Point decimation for smoothness, hold-to-snap (QuickShape-style recognition into line, circle or rectangle, with an Undo toast), and an always-on auto-shape mode. |
+| Precision | None | Smart alignment guides with snapping (Alt bypasses), lock, and z-order (persisted `zIndex`). |
+| Navigation | Instant zoom only | Animated zoom and fit (⇧1), hand-pan momentum, a minimap with click/drag navigation, and zoom presets. |
+| Presence | Cursors | Follow mode (click an avatar), and a laser pointer relayed to everyone (volatile, never persisted). |
+| History | Timeline list | A time-travel diff: preview what a restore would remove, bring back or change, outlined on the live canvas. |
+| Theming | Black ink invisible in dark mode | Theme-adaptive ink for strokes, text and outlines (rendering only; stored data is unchanged). |
+
+Bugs fixed along the way:
+- Creation tools dragged the object under the pointer.
+- New rectangles kept the translucent preview fill.
+- Seed arrows were drawn crossed.
+
+Tests:
+- `test/geometry.test.ts` covers anchoring, routing, guides, recognition and z-order.
+- `e2e/redesign.spec.ts` covers connector following, labels and quick actions, locking, hold-to-snap, zen mode and the minimap.
+- The backend has a laser relay test.
+
+## 7. Auto-arrange rebuilt (flow-aware layout)
+
+**Problem (reported).** "Arrange" scattered the diagram into a grid, and treated connectors as boxes. The two arrows ended up floating alone in grid cells.
+- The server arranger looked for `from`/`to` fields that nothing ever writes, so it had no relationships to work with.
+- Both arrangers ignored flow direction.
+- The client also persisted every position twice: once on the server, once from its own animation.
+- A hardcoded 2.8 s "analyzing" delay faked work.
+
+**Now** (`frontend/src/services/autoLayout.ts`, layered / Sugiyama-style):
+- **Connectors are edges.** The engine uses their bindings, or infers them from endpoints resting on shapes and persists those bindings.
+- **Ranking.** Longest-path ranking with cycle breaking, then barycenter sweeps to reduce crossings. Ranks are centered so chains share a centerline.
+- **Direction.** Left→right unless the drawing is clearly vertical.
+- **Long edges arc around obstacles.** They get a `bend` (curved connectors, new) so they never cut through shapes.
+- **Placement.** Unconnected shapes form a row below the flow. Sticky notes and free text go in a column beside it.
+- **Scope.** The result stays anchored at the original top-left. It applies to the selection when two or more items are selected; locked items, ink and comments never move.
+- **Applying it.** Arrange is instant and local, animates shapes with connectors re-routing every frame, and commits as one undo step (the toast offers Undo).
+- **Server endpoint.** `POST /boards/:id/arrange` moves shapes only and takes relationships from bindings.
+
+**Tests.**
+- `test/autoLayout.test.ts`: flow order and alignment, edge-to-edge routing, notes beside, anchoring, binding inference, vertical diagrams, branching, cycles, scope and lock, and long-edge curving.
+- `e2e/redesign.spec.ts`: the reported scenario end to end, including single-step undo.
+- A backend arrange-endpoint test.

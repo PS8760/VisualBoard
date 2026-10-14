@@ -22,7 +22,7 @@ test('onboarding tour spotlights the real tools and can be replayed', async ({ p
 
   // Step 2 highlights the Select + Hand buttons and names their shortcuts.
   const step = page.getByRole('dialog', { name: 'Select & move around' });
-  await expect(step.getByText(/Drag to pan/)).toBeVisible();
+  await expect(step.getByText(/to pan/)).toBeVisible();
   const ring = await page.locator('.ring-accent').first().boundingBox();
   const select = await page.locator('[data-tour="tool-select"]').boundingBox();
   expect(ring && select && ring.x <= select.x && ring.y <= select.y && ring.x + ring.width >= select.x + select.width).toBeTruthy();
@@ -32,13 +32,13 @@ test('onboarding tour spotlights the real tools and can be replayed', async ({ p
   await expect(page.locator('[data-tour="tool-select"]')).toHaveAttribute('aria-pressed', 'true');
 
   // Walk to the side-panel step: the panel opens for it and closes afterwards.
-  for (let i = 0; i < 5; i++) await page.getByRole('dialog').getByRole('button', { name: /^Next/ }).click();
+  for (let i = 0; i < 6; i++) await page.getByRole('dialog').getByRole('button', { name: /^Next/ }).click();
   await expect(page.getByRole('dialog', { name: 'Side panel' })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Board panel' })).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: /^Next/ }).click();
   await expect(page.getByRole('complementary', { name: 'Board panel' })).toHaveCount(0);
 
-  for (let i = 0; i < 3; i++) await page.getByRole('dialog').getByRole('button', { name: /^Next/ }).click();
+  for (let i = 0; i < 4; i++) await page.getByRole('dialog').getByRole('button', { name: /^Next/ }).click();
   await page.getByRole('button', { name: /Start creating/ }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem('vb_onboarding_seen'))).toBe('true');
