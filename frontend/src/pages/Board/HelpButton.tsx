@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { HelpCircle, X, Keyboard, Mouse, Users, Save } from 'lucide-react';
+import { HelpCircle, X, Keyboard, Mouse, Users, Save, PlayCircle } from 'lucide-react';
+import { REPLAY_TOUR_EVENT } from '../../utils/shortcuts';
 import { Tooltip } from '../../components/ui/Tooltip';
 
 export default function HelpButton() {
@@ -44,7 +45,18 @@ export default function HelpButton() {
                 <X size={16} />
               </button>
 
-              <h2 className="mb-6 text-2xl font-semibold text-ink">Quick Reference Guide</h2>
+              <div className="mb-6 flex flex-wrap items-center gap-3 pr-10">
+                <h2 className="text-2xl font-semibold text-ink">Quick Reference Guide</h2>
+                <button
+                  onClick={() => {
+                    setShow(false);
+                    window.dispatchEvent(new Event(REPLAY_TOUR_EVENT));
+                  }}
+                  className="flex h-8 items-center gap-1.5 rounded-sm border border-line-2 px-3 text-[12px] font-medium text-ink-2 transition-colors hover:bg-paper-2 hover:text-ink"
+                >
+                  <PlayCircle size={13} /> Replay tour
+                </button>
+              </div>
 
               {/* Drawing Tools */}
               <section className="mb-6">
@@ -62,6 +74,7 @@ export default function HelpButton() {
                   <HelpItem shortcut="A" description="Arrow - Draw arrows between elements" />
                   <HelpItem shortcut="T" description="Text - Click to add text" />
                   <HelpItem shortcut="S" description="Sticky Note - Add yellow sticky notes" />
+                  <HelpItem shortcut="I" description="Image - Place an image on the canvas" />
                   <HelpItem shortcut="D" description="Document - Attach files" />
                   <HelpItem shortcut="C" description="Comment - Add comments" />
                 </div>

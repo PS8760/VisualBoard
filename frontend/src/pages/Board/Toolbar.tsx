@@ -54,6 +54,7 @@ function ToolButton({ def }: { def: ToolDef }) {
       <button
         onClick={() => setTool(def.id)}
         aria-label={def.label}
+        data-tour={`tool-${def.id}`}
         aria-pressed={active}
         className={cn(
           'flex h-8 w-8 items-center justify-center rounded-sm transition-colors duration-100',
@@ -68,7 +69,7 @@ function ToolButton({ def }: { def: ToolDef }) {
 
 export default function Toolbar() {
   return (
-    <div className="flex w-[46px] shrink-0 flex-col items-center gap-0.5 border-r border-line bg-paper-2/50 py-2">
+    <div data-tour="toolbar" className="flex w-[46px] shrink-0 flex-col items-center gap-0.5 border-r border-line bg-paper-2/50 py-2">
       {TOOLS.map((def) => (
         <ToolButton key={def.id} def={def} />
       ))}

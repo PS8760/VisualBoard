@@ -25,8 +25,11 @@ import { useToolStore } from '../../stores/useToolStore';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { useSuggestionStore } from '../../stores/useSuggestionStore';
 import { useHotkeys } from '../../hooks/useHotkeys';
-import { attachRealtimeListeners } from '../../services/realtime';
+import { toast } from 'sonner';
+import { attachRealtimeListeners, pendingCount } from '../../services/realtime';
+import { fetchBoard } from '../../api/board.api';
 import { INITIAL_ELEMENTS } from './boardSeeds';
+import { uid } from '../../utils';
 import BoardSettingsModal from './BoardSettingsModal';
 import type { Tool } from '../../types';
 
@@ -41,6 +44,9 @@ const TOOL_KEYS: Record<string, Tool> = {
   t: 'text',
   s: 'sticky',
   c: 'comment',
+  // Advertised in the toolbar tooltips but previously never bound.
+  i: 'image',
+  d: 'document',
 };
 
 export default function Board() {
@@ -57,14 +63,19 @@ export default function Board() {
   const setRightPanel = useUIStore((s) => s.setRightPanel);
   const setRightPanelTab = useUIStore((s) => s.setRightPanelTab);
 
-  // keep the header in sync when the settings modal renames the board
+  // Keep the header in sync when the settings modal renames the board. Only
+  // metadata is refreshed — a full reload would discard queued edits.
   useEffect(() => {
     const onRenamed = () => {
-      void load(boardId);
+      void fetchBoard(boardId).then((res) => {
+        if (res.ok && res.board && useBoardStore.getState().board?.id === boardId) {
+          useBoardStore.getState().applyBoardMeta({ title: res.board.title, description: res.board.description });
+        }
+      });
     };
     window.addEventListener('vb:board-renamed', onRenamed);
     return () => window.removeEventListener('vb:board-renamed', onRenamed);
-  }, [boardId, load]);
+  }, [boardId]);
 
   // ---- load board -----------------------------------------------------------
   useEffect(() => {
@@ -80,7 +91,7 @@ export default function Board() {
     if (!presence.users.some((u) => u.isLocal)) {
       presence.addLocalUser({
         id: authUser?.id ?? 'u_local',
-        name: authUser?.name ?? 'Pranav',
+        name: authUser?.name ?? 'You',
         color: authUser?.color ?? '#d9480f',
       });
     }
@@ -88,9 +99,14 @@ export default function Board() {
 
   // ---- realtime -------------------------------------------------------------
   useEffect(() => {
-    usePresenceStore.getState().connect(boardId);
     const detach = attachRealtimeListeners();
+    usePresenceStore.getState().connect(boardId);
     return () => {
+      if (pendingCount(boardId) > 0) {
+        toast.warning('Some recent changes may not have been saved', {
+          description: 'You left the board while it was still syncing.',
+        });
+      }
       detach();
       usePresenceStore.getState().disconnect();
     };
@@ -119,7 +135,10 @@ export default function Board() {
       // storage unavailable — the age gate alone still protects old boards
     }
     const store = useBoardStore.getState();
-    INITIAL_ELEMENTS.forEach((el) => store.addElement(el));
+    // Element ids are global primary keys: fresh ids per board, or only the
+    // very first board ever created could receive the starter content.
+    INITIAL_ELEMENTS.forEach((el) => store.addElement({ ...el, id: uid('el'), version: 0 }));
+    store.commitHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board?.id, board?.elements.length]);
 
@@ -261,7 +280,7 @@ export default function Board() {
   const tool = useToolStore((s) => s.tool);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-paper text-ink">
+    <div className="flex h-screen flex-col overflow-clip bg-paper text-ink">
       <TopBar onOpenSettings={() => setSettingsOpen(true)} />
       <div className="relative flex flex-1 overflow-hidden">
         <Toolbar />
@@ -287,6 +306,7 @@ export default function Board() {
                 onClick={() => setRightPanel(true)}
                 className="flex h-12 w-5 items-center justify-center rounded-l-md border border-r-0 border-line-2 bg-paper text-ink-3 shadow-xs transition-colors hover:text-ink"
                 aria-label="Open panel"
+                data-tour="panel"
               >
                 <ChevronLeft size={12} className="-scale-x-100" />
               </button>

@@ -109,6 +109,7 @@ export default function TopBar({ onOpenSettings }: { onOpenSettings: () => void 
             onClick={() => setCommandPalette(true)}
             className="flex h-8 items-center gap-1.5 rounded-sm border border-line-2 bg-paper px-2.5 text-[11.5px] font-medium text-ink-2 transition-colors hover:border-line-3 hover:text-ink"
             aria-label="Open command palette"
+            data-tour="commands"
           >
             <Command size={13} />
             <span className="hidden md:inline">Commands</span>
@@ -121,6 +122,7 @@ export default function TopBar({ onOpenSettings }: { onOpenSettings: () => void 
             onClick={() => setVersionTimeline(true)}
             className="flex h-8 w-8 items-center justify-center rounded-sm text-ink-2 transition-colors hover:bg-paper-2 hover:text-ink"
             aria-label="Open version history"
+            data-tour="history"
           >
             <History size={15} />
           </button>
@@ -149,7 +151,7 @@ export default function TopBar({ onOpenSettings }: { onOpenSettings: () => void 
               </span>
             </Tooltip>
           )}
-          <div className="flex -space-x-1.5" aria-label={`${users.length} people online`}>
+          <div data-tour="presence" className="flex -space-x-1.5" aria-label={`${users.length} people online`}>
             {users.slice(0, 4).map((u) => (
               <Tooltip key={u.id} label={u.name} className="inline-flex">
                 <span
@@ -173,6 +175,7 @@ export default function TopBar({ onOpenSettings }: { onOpenSettings: () => void 
 
         <button
           onClick={share}
+          data-tour="share"
           className="ml-2 flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-[12px] font-medium text-white transition-colors hover:bg-accent-2"
         >
           <Share2 size={13} />

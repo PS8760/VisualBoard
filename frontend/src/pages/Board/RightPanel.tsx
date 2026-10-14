@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Info, MessageSquare, FileText, Sparkles, X, GitBranch, Check, Loader2, AlertTriangle, Wand2,
+  Info, MessageSquare, FileText, Sparkles, X, GitBranch, Check, Loader2, AlertTriangle, Wand2, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Canvas } from 'fabric';
 import { cn, formatFileSize, timeAgo } from '../../utils';
 import { useBoardStore } from '../../stores/useBoardStore';
 import { useCanvasStore } from '../../stores/useCanvasStore';
@@ -12,8 +11,8 @@ import { useUIStore } from '../../stores/useUIStore';
 import { useSuggestionStore } from '../../stores/useSuggestionStore';
 import { fetchBoardSuggestions, type AiSuggestion } from '../../api/suggestions.api';
 import { SUGGESTION_META } from '../../utils/shortcuts';
-import { elementId } from '../../services/fabric.elements';
-import type { PanelTab, BoardElement } from '../../types';
+import { useAuthStore } from '../../stores/useAuthStore';
+import type { PanelTab, BoardElement, CommentItem } from '../../types';
 
 const TABS: Array<{ id: PanelTab; label: string; icon: typeof Info }> = [
   { id: 'info', label: 'Info', icon: Info },
@@ -38,6 +37,7 @@ export default function RightPanel() {
       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
       className="flex w-[300px] shrink-0 flex-col border-l border-line bg-paper"
       aria-label="Board panel"
+      data-tour="panel"
     >
       <div className="flex items-center justify-between border-b border-line px-3">
         <div className="flex gap-0.5" role="tablist" aria-label="Panel sections">
@@ -80,14 +80,13 @@ export default function RightPanel() {
 function BoardInfo() {
   const board = useBoardStore((s) => s.board);
   const selectedIds = useBoardStore((s) => s.selectedIds);
-  const canvas = useCanvasStore((s) => s.canvas);
 
   const stats = board
     ? [
       ['Elements', board.elements.length],
       ['Connections', board.elements.filter((e) => e.kind === 'line' || e.kind === 'arrow').length],
       ['Attachments', board.elements.filter((e) => e.attachment).length],
-      ['Members', (board.members?.length ?? 0) + 1],
+      ['Members', board.members?.length ?? 0],
     ]
     : [];
 
@@ -116,7 +115,7 @@ function BoardInfo() {
       </div>
 
       {selectedIds.length > 0 && selectedElements.length > 0 && (
-        <ShapeInspector elements={selectedElements} canvas={canvas} />
+        <ShapeInspector elements={selectedElements} />
       )}
 
       <div>
@@ -145,10 +144,9 @@ function BoardInfo() {
 
 interface ShapeInspectorProps {
   elements: BoardElement[];
-  canvas: Canvas | null;
 }
 
-function ShapeInspector({ elements, canvas }: ShapeInspectorProps) {
+function ShapeInspector({ elements }: ShapeInspectorProps) {
   const updateElement = useBoardStore((s) => s.updateElement);
 
   // Find common properties across selected elements
@@ -164,22 +162,12 @@ function ShapeInspector({ elements, canvas }: ShapeInspectorProps) {
   const commonStrokeWidth = canEditStrokeWidth && elements.every((e) => e.strokeWidth === firstEl.strokeWidth) ? firstEl.strokeWidth : 1.5;
   const commonFontSize = canEditFontSize && elements.every((e) => e.fontSize === firstEl.fontSize) ? firstEl.fontSize : 14;
 
+  // The canvas re-renders changed elements from the store, so edits made here
+  // look identical locally and for collaborators (no direct fabric mutation).
   const handlePropertyChange = (property: keyof BoardElement, value: string | number) => {
-    elements.forEach((el) => {
-      updateElement(el.id, { [property]: value } as Partial<BoardElement>);
-      // Update fabric object immediately for visual feedback
-      if (canvas) {
-        const obj = canvas.getObjects().find((o) => elementId(o) === el.id);
-        if (obj) {
-          if (property === 'fill' && 'fill' in obj) obj.set({ fill: value });
-          if (property === 'stroke' && 'stroke' in obj) obj.set({ stroke: value });
-          if (property === 'strokeWidth' && 'strokeWidth' in obj) obj.set({ strokeWidth: value });
-          if (property === 'fontSize' && 'fontSize' in obj) obj.set({ fontSize: value });
-          if (property === 'opacity') obj.set({ opacity: value });
-        }
-      }
-    });
-    canvas?.requestRenderAll();
+    // The server caps color strings at 50 chars; longer input would be rejected.
+    if ((property === 'fill' || property === 'stroke') && String(value).length > 50) return;
+    elements.forEach((el) => updateElement(el.id, { [property]: value } as Partial<BoardElement>));
   };
 
   return (
@@ -292,12 +280,27 @@ function ShapeInspector({ elements, canvas }: ShapeInspectorProps) {
 
 function CommentsPanel() {
   const comments = useBoardStore((s) => s.comments);
+  const me = useAuthStore((s) => s.user?.id);
+  const isOwner = useBoardStore((s) => s.board?.members.find((m) => m.id === me)?.role === 'owner');
   const [draft, setDraft] = useState('');
 
   const post = () => {
     if (!draft.trim()) return;
     useBoardStore.getState().addComment(draft.trim());
     setDraft('');
+  };
+
+  const focusThread = (c: CommentItem) => {
+    if (c.x === undefined || c.y === undefined) return;
+    const { container, canvas, viewport } = useCanvasStore.getState();
+    if (canvas && container) {
+      // Center the thread anchor in view at the current zoom.
+      const s = viewport.scale;
+      canvas.setViewportTransform([s, 0, 0, s, container.clientWidth / 2 - c.x * s, container.clientHeight / 2 - c.y * s]);
+      canvas.requestRenderAll();
+      useCanvasStore.getState().syncViewport();
+    }
+    useUIStore.getState().setActiveComment({ elementId: c.elementId, x: c.x, y: c.y });
   };
 
   return (
@@ -309,21 +312,36 @@ function CommentsPanel() {
           </p>
         )}
         {comments.map((c) => (
-          <div key={c.id} className="rounded-md border border-line bg-paper p-2.5 shadow-xs">
+          <div key={c.id} className={cn('group rounded-md border bg-paper p-2.5 shadow-xs', c.failed ? 'border-danger/40' : 'border-line')}>
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 items-center justify-center rounded-full text-[8px] font-semibold text-white" style={{ background: c.author.color }}>
                 {c.author.name.slice(0, 1).toUpperCase()}
               </span>
               <span className="text-[11.5px] font-semibold text-ink">{c.author.name}</span>
-              <span className="ml-auto font-mono text-[9.5px] text-ink-3">{timeAgo(c.createdAt)}</span>
+              <span className="ml-auto font-mono text-[9.5px] text-ink-3">
+                {c.pending ? <Loader2 size={10} className="animate-spin" /> : timeAgo(c.createdAt)}
+              </span>
+              {(c.author.id === me || isOwner || c.failed) && !c.pending && (
+                <button
+                  onClick={() => useBoardStore.getState().removeComment(c.id)}
+                  className="hidden h-5 w-5 items-center justify-center rounded-sm text-ink-3 hover:bg-danger-soft hover:text-danger group-hover:flex"
+                  aria-label="Delete comment"
+                >
+                  <Trash2 size={11} />
+                </button>
+              )}
             </div>
-            <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-2">
+            <p className="mt-1.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-ink-2">
               {c.text || <span className="text-ink-3">—</span>}
             </p>
-            {c.elementId && (
-              <p className="mt-1 font-mono text-[9px] uppercase tracking-wide text-ink-3">
-                pinned to {c.elementId.replace('el_', '')}
-              </p>
+            {c.failed && <p className="mt-1 text-[10.5px] text-danger">Not posted — delete it and try again.</p>}
+            {c.x !== undefined && c.y !== undefined && (
+              <button
+                onClick={() => focusThread(c)}
+                className="mt-1 font-mono text-[9px] uppercase tracking-wide text-ink-3 hover:text-accent"
+              >
+                {c.elementId ? `pinned to ${c.elementId.replace('el_', '')}` : 'pinned on canvas'} · show
+              </button>
             )}
           </div>
         ))}
@@ -333,6 +351,7 @@ function CommentsPanel() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && post()}
+          maxLength={2000}
           placeholder="Write a comment…"
           className="h-8 flex-1 rounded-sm border border-line-2 bg-paper px-2.5 text-[12px] text-ink placeholder:text-ink-3 focus:border-ink focus:outline-none"
           aria-label="New comment"

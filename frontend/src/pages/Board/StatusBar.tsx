@@ -114,6 +114,7 @@ export default function StatusBar() {
                 : 'bg-ink text-paper hover:bg-black',
             )}
             aria-label="Arrange elements"
+            data-tour="arrange"
           >
             {arrangeAnalyzing ? (
               <Loader2 size={12} className="animate-spin" />
@@ -132,6 +133,7 @@ export default function StatusBar() {
             disabled={!canUndo}
             className="flex h-7 w-7 items-center justify-center rounded-sm text-ink-2 transition-colors hover:bg-paper-2 hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent"
             aria-label="Undo"
+            data-tour="undo"
           >
             <Undo2 size={13} />
           </button>
@@ -142,6 +144,7 @@ export default function StatusBar() {
             disabled={!canRedo}
             className="flex h-7 w-7 items-center justify-center rounded-sm text-ink-2 transition-colors hover:bg-paper-2 hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent"
             aria-label="Redo"
+            data-tour="redo"
           >
             <Redo2 size={13} />
           </button>
