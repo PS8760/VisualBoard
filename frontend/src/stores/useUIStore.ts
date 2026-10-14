@@ -7,7 +7,11 @@ interface UIState {
   commandPaletteOpen: boolean;
   versionTimelineOpen: boolean;
   documentPreview: { id: string; name: string; type: string; size: number; uploadedAt: string; url?: string } | null;
-  activeComment: { elementId: string; x: number; y: number } | null;
+  /**
+   * Open comment thread / composer. Anchored in WORLD coordinates (or to an
+   * element) so it stays glued to the canvas while panning and zooming.
+   */
+  activeComment: { elementId?: string; x: number; y: number } | null;
   arrangeComplete: boolean;
   arrangeAnalyzing: boolean;
   shortcutTooltip: string | null;

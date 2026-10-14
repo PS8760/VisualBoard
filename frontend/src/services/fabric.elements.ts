@@ -8,6 +8,7 @@ import {
   Path,
   FabricImage,
   FabricObject,
+  util,
   type FabricObjectProps,
   type TPointerEventInfo,
   type TPointerEvent,
@@ -15,11 +16,20 @@ import {
 import type { AttachmentMeta, BoardElement, ElementKind } from '../types';
 import { uid } from '../utils';
 
+/*
+ * Fabric 7 positions objects by their CENTER by default. Every coordinate in
+ * this app (element x/y, overlays, auto-arrange, the backend layout engine,
+ * persisted data) is top-left based, so pin the origin globally before any
+ * object is constructed. Without this, shapes jumped by half their size on
+ * creation and attachment/comment overlays drifted off their elements.
+ */
+FabricObject.ownDefaults.originX = 'left';
+FabricObject.ownDefaults.originY = 'top';
+
 export interface VBData {
   id?: string;
   kind?: ElementKind;
   attachment?: AttachmentMeta | null;
-  commentCount?: number;
 }
 
 /** A fabric path segment, e.g. ["M", x, y] or ["Q", cx, cy, x, y]. */
@@ -111,10 +121,12 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
     left: el.x,
     top: el.y,
     angle: el.rotation,
+    scaleX: el.scaleX ?? 1,
+    scaleY: el.scaleY ?? 1,
     opacity: el.opacity ?? 1,
     selectable: opts.selectable ?? true,
     evented: opts.evented ?? true,
-    data: { id: el.id, kind: el.kind, attachment: el.attachment, commentCount: el.commentCount },
+    data: { id: el.id, kind: el.kind, attachment: el.attachment },
   };
 
   switch (el.kind) {
@@ -253,18 +265,26 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
       });
     }
     case 'image': {
+      // Size from the element (displayed size), not the bitmap: the bitmap
+      // loads asynchronously and has no dimensions yet, so computing a scale
+      // here divided by zero.
       const imgEl = new Image();
-      imgEl.src = el.content;
       const img = new FabricImage(imgEl, {
         ...shared,
-        left: el.x,
-        top: el.y,
+        scaleX: 1,
+        scaleY: 1,
         width: el.width,
         height: el.height,
         objectCaching: false,
       });
-      img.scaleToWidth(el.width);
-      img.scaleToHeight(el.height);
+      imgEl.onload = () => {
+        const w = imgEl.naturalWidth || el.width;
+        const h = imgEl.naturalHeight || el.height;
+        img.set({ width: w, height: h, scaleX: el.width / w, scaleY: el.height / h });
+        img.setCoords();
+        img.canvas?.requestRenderAll();
+      };
+      imgEl.src = el.content;
       return img;
     }
     case 'comment':
@@ -306,13 +326,14 @@ export function serializeElement(obj: FabricObject): BoardElement | null {
     width: obj.width ?? 0,
     height: obj.height ?? 0,
     rotation: obj.angle ?? 0,
+    scaleX: obj.scaleX ?? 1,
+    scaleY: obj.scaleY ?? 1,
     fill: (obj.fill as string) ?? '#fafaf8',
     stroke: (obj.stroke as string) ?? '#c2c0b5',
     strokeWidth: obj.strokeWidth ?? 1.5,
     content: '',
     attachment: data.attachment ?? null,
-    commentCount: data.commentCount ?? 0,
-    version: 1,
+    version: 0,
   } as BoardElement;
 
   if (obj instanceof Line) {
@@ -338,17 +359,72 @@ export function serializeElement(obj: FabricObject): BoardElement | null {
     return { ...common, content: obj.text ?? '', fontSize: obj.fontSize };
   }
   if (obj instanceof FabricImage) {
-    return { ...common, content: (obj.getElement() as HTMLImageElement).src ?? '' };
+    // Images persist their displayed size; the bitmap scale is derived on load.
+    return {
+      ...common,
+      width: obj.getScaledWidth(),
+      height: obj.getScaledHeight(),
+      scaleX: 1,
+      scaleY: 1,
+      content: (obj.getElement() as HTMLImageElement).src ?? '',
+    };
   }
   if (obj instanceof Group) {
-    const textObj = obj.getObjects().find((o) => o instanceof IText) as IText | undefined;
-    return { ...common, content: textObj?.text ?? '', fontSize: textObj?.fontSize };
+    const children = obj.getObjects();
+    const textObj = children.find((o) => o instanceof IText) as IText | undefined;
+    // Group bounds include the background stroke; persisting them made cards
+    // grow by a pixel on every save. The background rect is the true size.
+    const bg = children.find((o) => o instanceof Rect) as Rect | undefined;
+    return {
+      ...common,
+      width: bg?.width ?? common.width,
+      height: bg?.height ?? common.height,
+      fill: (bg?.fill as string) ?? common.fill,
+      stroke: (bg?.stroke as string) ?? common.stroke,
+      content: textObj?.text ?? '',
+      fontSize: textObj?.fontSize,
+    };
   }
   if (obj instanceof Circle) {
     const r = obj.radius ?? 1;
     return { ...common, width: r * 2, height: r * 2, fill: obj.fill as string, stroke: obj.stroke as string };
   }
   return common;
+}
+
+/** Key-order independent JSON (jsonb from the server reorders keys). */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .filter((k) => (value as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical((value as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * Everything that affects how an element renders. Server bookkeeping
+ * (version, legacy counters) is excluded so an ack that only bumps the
+ * version never forces the canvas object to be rebuilt.
+ */
+export function renderSignature(el: BoardElement): string {
+  const { version: _version, commentCount: _count, ...rest } = el;
+  void _version;
+  void _count;
+  return canonical(rest);
+}
+
+/**
+ * World-space center, rotation and scale of an object — correct even for
+ * members of an ActiveSelection, whose own left/top/angle are relative to the
+ * selection rather than the canvas.
+ */
+export function worldTransform(obj: FabricObject) {
+  const d = util.qrDecompose(obj.calcTransformMatrix());
+  return { cx: d.translateX, cy: d.translateY, angle: d.angle, scaleX: d.scaleX, scaleY: d.scaleY };
 }
 
 export const GRID_SIZE = 20;
@@ -367,7 +443,7 @@ export interface DrawingState {
   object: FabricObject | null;
   kind: ElementKind;
   origin: { x: number; y: number };
-  type: 'shape' | 'text' | 'comment';
+  type: 'shape' | 'text';
 }
 
 /** Dimension info emitted during live drawing for the HUD overlay. */
@@ -409,10 +485,6 @@ export function startDrawing(canvas: Canvas, kind: ElementKind, point: { x: numb
     case 'text':
       object = new IText('Type…', { ...common, left: point.x, top: point.y, fontSize: 18, fontFamily: 'Inter', fill: '#1b1a17' });
       type = 'text';
-      break;
-    case 'comment':
-      object = new Circle({ ...common, radius: 9, fill: CANVAS_COLORS.commentFill, stroke: '#ffffff', strokeWidth: 2 });
-      type = 'comment';
       break;
     case 'image':
     case 'document':
@@ -535,7 +607,7 @@ export function endDrawing(
 
   const el = serializeElement(obj);
   if (!el) return null;
-  el.id = uid(state.kind === 'comment' ? 'cm' : 'el');
+  el.id = uid('el');
 
   // Ensure preview styling (semi-transparent) does not persist into final element
   if (state.kind === 'rect' || state.kind === 'sticky') {
