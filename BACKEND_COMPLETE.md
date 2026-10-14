@@ -514,3 +514,6 @@ The backend is a complete, production-ready collaborative whiteboard server with
 **Build Status**: PASS  
 **Lint Status**: PASS  
 **Ready for Production**: YES
+
+
+Objectives(So, we have 3 main objectives, Individual entries are indicated with a black dot, a so-called bullet,the text in the entries may be of any length)
