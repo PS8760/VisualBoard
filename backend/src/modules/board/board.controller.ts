@@ -17,6 +17,8 @@ import { sendSuccess } from '../../utils/response.js';
 import { assertBoardRole, assertBoardAccess } from '../../services/rbac.js';
 import { getStorage } from '../../services/storage/index.js';
 import { getUserForInvite, publicAvatar } from '../user/user.service.js';
+import { emitToBoard } from '../socket/socket.bus.js';
+import { SocketEvents } from '../socket/socket.constants.js';
 import type { AuthRequest } from '../../middleware/auth.middleware.js';
 
 export const create = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -56,6 +58,7 @@ export const update = async (req: AuthRequest, res: Response, next: NextFunction
     const { title, description } = maybeParse(updateBoardSchema, req.body);
     await assertBoardRole(req.user, id, 'editor');
     const board = await updateBoard(id, { title, description });
+    emitToBoard(id, SocketEvents.BOARD_UPDATED, { boardId: id, title: board.title, description: board.description });
     sendSuccess(res, board);
   } catch (e) {
     next(e);
@@ -67,6 +70,7 @@ export const remove = async (req: AuthRequest, res: Response, next: NextFunction
     const { id } = parseOrThrow(boardIdParamSchema, req.params);
     await assertBoardRole(req.user, id, 'owner');
     const storedKeys = await deleteBoard(id);
+    emitToBoard(id, SocketEvents.BOARD_UPDATED, { boardId: id, deleted: true });
     const storage = getStorage();
     for (const key of storedKeys) {
       await storage.delete(key).catch(() => undefined);
@@ -173,14 +177,18 @@ export const arrangeBoard = async (req: AuthRequest, res: Response, next: NextFu
     });
     
     const positions = arrangeElements(elementsData);
-    
-    // Update positions in database
-    const updates = Array.from(positions.entries()).map(async ([elementId, pos]) => {
-      await updateElement(id, elementId, { x: pos.x, y: pos.y });
-    });
-    
-    await Promise.all(updates);
-    
+
+    // Persist sequentially (each is an atomic jsonb patch) and fan out the
+    // authoritative rows so every collaborator sees the same layout.
+    for (const [elementId, pos] of positions) {
+      try {
+        const row = await updateElement(id, elementId, { x: pos.x, y: pos.y }, { userId: req.user.id });
+        emitToBoard(id, SocketEvents.ELEMENT_UPDATED, { boardId: id, id: elementId, element: row.element_data });
+      } catch {
+        // Element deleted concurrently — skip it.
+      }
+    }
+
     sendSuccess(res, { arranged: positions.size, positions: Object.fromEntries(positions) });
   } catch (e) {
     next(e);

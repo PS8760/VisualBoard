@@ -5,6 +5,8 @@ export const createCommentSchema = z.object({
   element_id: z.string().max(64).nullish(),
   x: z.number().finite().nullish(),
   y: z.number().finite().nullish(),
+  /** Client-generated id of the optimistic copy (echoed back in the broadcast). */
+  clientId: z.string().min(1).max(64).nullish(),
 });
 
 export const updateCommentSchema = z.object({
