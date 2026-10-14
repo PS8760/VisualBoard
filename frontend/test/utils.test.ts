@@ -35,7 +35,7 @@ describe('timeAgo', () => {
   });
 
   it('falls back to a date for old timestamps', () => {
-    expect(timeAgo(new Date('2026-01-01T00:00:00Z').toISOString())).toMatch(/Jan 1/);
+    expect(timeAgo(new Date('2026-01-01T00:00:00Z').toISOString())).toMatch(/Jan 1|1 Jan/);
   });
 });
 

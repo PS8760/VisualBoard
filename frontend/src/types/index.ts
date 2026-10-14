@@ -59,6 +59,9 @@ export interface BoardElement {
   width: number;
   height: number;
   rotation: number;
+  /** Interactive resize factor (1 = unscaled). Images bake scale into width/height. */
+  scaleX?: number;
+  scaleY?: number;
   fill: string;
   stroke: string;
   strokeWidth: number;
@@ -69,8 +72,10 @@ export interface BoardElement {
   points?: number[];
   pointsToPath?: string;
   attachment?: AttachmentMeta | null;
+  /** @deprecated legacy denormalized counter — counts are derived from comments. */
   commentCount?: number;
   opacity?: number;
+  /** Server-assigned, monotonically increasing per element (0 = never persisted). */
   version: number;
 }
 
@@ -88,12 +93,18 @@ export interface Board {
 export interface CommentItem {
   id: string;
   boardId: string;
+  /** Element the thread is pinned to (follows the element when it moves). */
   elementId?: string;
+  /** Absolute world-space anchor; used for free pins and as a fallback for element pins. */
   x?: number;
   y?: number;
-  author: { id: string; name: string; color: string };
+  author: { id: string; name: string; color: string; initials?: string };
   text: string;
   createdAt: string;
+  /** True while an optimistic comment awaits the server. */
+  pending?: boolean;
+  /** Set when the server rejected an optimistic comment. */
+  failed?: boolean;
 }
 
 export type SuggestionKind = 'auth' | 'cache' | 'queue' | 'monitoring' | 'database' | 'gateway';
@@ -110,6 +121,8 @@ export interface Suggestion {
 export interface BoardVersion {
   id: string;
   label: string;
+  /** Snapshot origin: manual checkpoint, auto-save, or safety copy. */
+  kind?: string;
   timestamp: string;
   author: string;
   description: string;

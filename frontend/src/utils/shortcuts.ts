@@ -107,3 +107,6 @@ export const SUGGESTION_META: Record<
 };
 
 export const PRESENCE_COLORS = ['#d9480f', '#2563eb', '#7c3aed', '#0d9488', '#c2352c', '#b45309'];
+
+/** Dispatch on window to replay the onboarding tour (e.g. from the help dialog). */
+export const REPLAY_TOUR_EVENT = 'vb:replay-onboarding';

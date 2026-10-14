@@ -64,3 +64,49 @@ export function throttle<A extends unknown[]>(fn: (...args: A) => void, limit: n
     }, limit);
   };
 }
+/**
+ * Throttle with a trailing call: the first call runs immediately, calls during
+ * the window collapse into one that runs when it ends with the latest args.
+ * Use when the *last* value matters (cursor resting position, drag end).
+ */
+export function throttleTrailing<A extends unknown[]>(fn: (...args: A) => void, limit: number) {
+  let last = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let pending: A | null = null;
+  return (...args: A) => {
+    const now = Date.now();
+    const remaining = limit - (now - last);
+    if (remaining <= 0) {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      last = now;
+      pending = null;
+      fn(...args);
+      return;
+    }
+    pending = args;
+    if (!timer) {
+      timer = setTimeout(() => {
+        timer = undefined;
+        last = Date.now();
+        if (pending) {
+          const a = pending;
+          pending = null;
+          fn(...a);
+        }
+      }, remaining);
+    }
+  };
+}
+
+const USER_COLORS = ['#d9480f', '#2f9e44', '#1971c2', '#e8590c', '#7048e8', '#0c8599'];
+
+/** Stable per-user color so the same person looks the same on every client. */
+export function colorForUser(id: string | number): string {
+  const key = String(id);
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  return USER_COLORS[Math.abs(hash) % USER_COLORS.length]!;
+}
