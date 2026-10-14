@@ -1,5 +1,7 @@
-import { mkdir, writeFile, readFile, unlink, access } from 'node:fs/promises';
-import { join, resolve, dirname } from 'node:path';
+import { createReadStream } from 'node:fs';
+import { mkdir, writeFile, readFile, unlink, access, stat } from 'node:fs/promises';
+import type { Readable } from 'node:stream';
+import { join, resolve, dirname, sep } from 'node:path';
 import type { StorageDriver } from './driver.js';
 
 /**
@@ -15,7 +17,12 @@ export class LocalStorageDriver implements StorageDriver {
   }
 
   private pathFor(key: string): string {
-    return join(this.dir, key);
+    // Keys are server-generated, but never let one escape the upload root.
+    const target = resolve(join(this.dir, key));
+    if (!target.startsWith(this.dir + sep) && target !== this.dir) {
+      throw new Error('Invalid storage key');
+    }
+    return target;
   }
 
   async save(key: string, data: Buffer): Promise<{ key: string; existed: boolean }> {
@@ -35,6 +42,16 @@ export class LocalStorageDriver implements StorageDriver {
   async read(key: string): Promise<Buffer | null> {
     try {
       return await readFile(this.pathFor(key));
+    } catch {
+      return null;
+    }
+  }
+
+  async stream(key: string): Promise<{ body: Readable; size?: number } | null> {
+    try {
+      const path = this.pathFor(key);
+      const info = await stat(path);
+      return { body: createReadStream(path), size: info.size };
     } catch {
       return null;
     }
