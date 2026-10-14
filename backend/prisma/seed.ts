@@ -120,12 +120,14 @@ async function main() {
     create: { user_id: viewer.id, board_id: board.id, role: 'viewer' },
   });
 
-  for (const element of demoElements) {
+  // Idempotent: re-running the seed must not duplicate the demo content.
+  const hasElements = (await prisma.elements.count({ where: { board_id: board.id } })) > 0;
+  for (const element of hasElements ? [] : demoElements) {
     await prisma.elements.create({
       data: {
         id: element.id,
         board_id: board.id,
-        element_data: { ...element, id: undefined },
+        element_data: { ...element, version: 1 },
       },
     });
   }
@@ -159,6 +161,14 @@ async function main() {
       snapshot,
     },
   });
+
+  // Rows above use explicit ids, which do not advance Postgres sequences — the
+  // next board/comment/version created through the app would collide on id 1.
+  for (const table of ['boards', 'comments', 'versions']) {
+    await prisma.$executeRawUnsafe(
+      `SELECT setval(pg_get_serial_sequence('"${table}"', 'id'), GREATEST((SELECT COALESCE(MAX(id), 0) FROM "${table}"), 1))`,
+    );
+  }
 
   console.log('Seeding complete. Demo users:');
   console.log(`  owner@example.com / ${DEV_PASSWORD} (owner)`);

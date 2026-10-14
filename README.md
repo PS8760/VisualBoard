@@ -85,10 +85,15 @@ cd backend && npm test
 cd frontend && npm test
 
 # End-to-end — needs the backend running with a seeded DB, then:
+# (RATE_LIMIT_AUTH_MAX=1000 on the API avoids login throttling across repeated runs)
 cd frontend && npx playwright install chromium && npm run test:e2e
 ```
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, unit tests, build, and the Playwright suite on every push/PR.
+
+## Realtime model
+
+Edits apply optimistically and flow through an ACKed, idempotent socket protocol with server-owned per-element versions, offline queueing and resync-on-reconnect. Version history auto-snapshots after edits settle, and restores propagate to every connected client in place. Details: [`docs/AUDIT_AND_REFACTOR.md`](docs/AUDIT_AND_REFACTOR.md).
 
 ## API
 
@@ -102,10 +107,14 @@ Full reference in [`docs/API.md`](docs/API.md). Responses use a consistent envel
 ## Docker
 
 ```bash
-docker compose up --build
+# GROQ_API_KEY / JWT_SECRET are read from the shell (or a root-level .env file)
+docker compose up --build -d
+docker compose exec backend npx tsx prisma/seed.ts   # demo users + board (idempotent)
 ```
 
-Runs Postgres + Redis + backend (:8000, with healthchecks, migrations on boot) + frontend (nginx :5174, proxying `/api` and `/socket.io`). Set `JWT_SECRET` when running in production.
+Runs Postgres + Redis + backend (:8000, healthcheck, migrations on boot, socket.io Redis adapter) + frontend (nginx :5174, proxying `/api` and `/socket.io`, 12 MB upload limit). Set `JWT_SECRET` when running in production.
+
+If a local Postgres/Redis already uses 5432/6379, remap the host ports: `DB_HOST_PORT=5433 REDIS_HOST_PORT=6380 docker compose up -d`. Rate limits can be tuned with `RATE_LIMIT_AUTH_MAX`, `RATE_LIMIT_WRITE_MAX` and `RATE_LIMIT_MAX` (e.g. raise them for e2e runs).
 
 ## Production notes
 
