@@ -26,10 +26,6 @@ export const INITIAL_ELEMENTS: BoardElement[] = [
     content: 'Sketch the flow first — labels can wait.', version: 1,
   },
   {
-    id: 'seed_5', kind: 'comment', x: -220, y: -170, width: 16, height: 16, rotation: 0,
-    fill: '#d9480f', stroke: 'transparent', strokeWidth: 0, content: '', commentCount: 1, version: 1,
-  },
-  {
     id: 'seed_6', kind: 'arrow', x: 0, y: 0, width: 0, height: 0, rotation: 0,
     fill: 'transparent', stroke: '#a8a69c', strokeWidth: 1.5, content: '',
     points: [-390, -90, -300, -90], version: 1,

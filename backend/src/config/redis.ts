@@ -48,5 +48,28 @@ if (redisClient) {
 
 export const isRedisAvailable = () => connected;
 
+/**
+ * Resolves true once Redis is ready (false on timeout or when disabled).
+ * The initial connect is asynchronous, so a synchronous isRedisAvailable()
+ * check at boot always reported false.
+ */
+export function whenRedisReady(timeoutMs = 5_000): Promise<boolean> {
+  const client = redisClient;
+  if (!client) return Promise.resolve(false);
+  if (connected) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onReady = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      client.off('ready', onReady);
+      resolve(false);
+    }, timeoutMs);
+    timer.unref();
+    client.once('ready', onReady);
+  });
+}
+
 export { redisClient };
 export default redisClient;

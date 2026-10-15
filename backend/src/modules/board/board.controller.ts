@@ -17,6 +17,8 @@ import { sendSuccess } from '../../utils/response.js';
 import { assertBoardRole, assertBoardAccess } from '../../services/rbac.js';
 import { getStorage } from '../../services/storage/index.js';
 import { getUserForInvite, publicAvatar } from '../user/user.service.js';
+import { emitToBoard } from '../socket/socket.bus.js';
+import { SocketEvents } from '../socket/socket.constants.js';
 import type { AuthRequest } from '../../middleware/auth.middleware.js';
 
 export const create = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -56,6 +58,7 @@ export const update = async (req: AuthRequest, res: Response, next: NextFunction
     const { title, description } = maybeParse(updateBoardSchema, req.body);
     await assertBoardRole(req.user, id, 'editor');
     const board = await updateBoard(id, { title, description });
+    emitToBoard(id, SocketEvents.BOARD_UPDATED, { boardId: id, title: board.title, description: board.description });
     sendSuccess(res, board);
   } catch (e) {
     next(e);
@@ -67,6 +70,7 @@ export const remove = async (req: AuthRequest, res: Response, next: NextFunction
     const { id } = parseOrThrow(boardIdParamSchema, req.params);
     await assertBoardRole(req.user, id, 'owner');
     const storedKeys = await deleteBoard(id);
+    emitToBoard(id, SocketEvents.BOARD_UPDATED, { boardId: id, deleted: true });
     const storage = getStorage();
     for (const key of storedKeys) {
       await storage.delete(key).catch(() => undefined);
@@ -159,28 +163,46 @@ export const arrangeBoard = async (req: AuthRequest, res: Response, next: NextFu
     const { listElementsByBoard, updateElement } = await import('../element/element.service.js');
     
     const elements = await listElementsByBoard(id);
-    const elementsData = elements.map((el) => {
-      const data = el.element_data as Record<string, unknown>;
-      return {
-        id: el.id,
-        x: typeof data.x === 'number' ? data.x : 0,
-        y: typeof data.y === 'number' ? data.y : 0,
-        width: typeof data.width === 'number' ? data.width : 100,
-        height: typeof data.height === 'number' ? data.height : 100,
-        kind: typeof data.kind === 'string' ? data.kind : undefined,
-        ...data,
-      };
-    });
-    
-    const positions = arrangeElements(elementsData);
-    
-    // Update positions in database
-    const updates = Array.from(positions.entries()).map(async ([elementId, pos]) => {
-      await updateElement(id, elementId, { x: pos.x, y: pos.y });
-    });
-    
-    await Promise.all(updates);
-    
+    // Only shapes are laid out. Connectors are relationships (from their
+    // bindings), never boxes to place; ink and comments stay where they are.
+    const LAYOUT_KINDS = new Set(['rect', 'circle', 'sticky', 'document', 'image', 'text']);
+    const nodes = elements
+      .map((el) => ({ id: el.id, data: el.element_data as Record<string, unknown> }))
+      .filter(({ data }) => typeof data.kind === 'string' && LAYOUT_KINDS.has(data.kind) && !data.locked);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const elementsData = nodes.map(({ id: elementId, data }) => ({
+      ...data,
+      id: elementId,
+      x: typeof data.x === 'number' ? data.x : 0,
+      y: typeof data.y === 'number' ? data.y : 0,
+      width: typeof data.width === 'number' ? data.width : 100,
+      height: typeof data.height === 'number' ? data.height : 100,
+      kind: data.kind as string,
+    }));
+    const relationships = elements
+      .map((el) => el.element_data as Record<string, unknown>)
+      .map((data) => ({
+        from: (data.startBinding as { elementId?: string } | null)?.elementId,
+        to: (data.endBinding as { elementId?: string } | null)?.elementId,
+      }))
+      .filter((r): r is { from: string; to: string } => !!r.from && !!r.to && nodeIds.has(r.from) && nodeIds.has(r.to));
+    for (const node of elementsData) {
+      (node as Record<string, unknown>).relationships = relationships.filter((r) => r.from === node.id).map((r) => r.to);
+    }
+
+    const positions = new Map([...arrangeElements(elementsData)].filter(([elementId]) => nodeIds.has(elementId)));
+
+    // Persist sequentially (each is an atomic jsonb patch) and fan out the
+    // authoritative rows so every collaborator sees the same layout.
+    for (const [elementId, pos] of positions) {
+      try {
+        const row = await updateElement(id, elementId, { x: pos.x, y: pos.y }, { userId: req.user.id });
+        emitToBoard(id, SocketEvents.ELEMENT_UPDATED, { boardId: id, id: elementId, element: row.element_data });
+      } catch {
+        // Element deleted concurrently — skip it.
+      }
+    }
+
     sendSuccess(res, { arranged: positions.size, positions: Object.fromEntries(positions) });
   } catch (e) {
     next(e);

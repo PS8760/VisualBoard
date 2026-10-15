@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { extname } from 'node:path';
+import { Prisma } from '@prisma/client';
 import prisma from '../../config/prisma.js';
 import { badRequestError, notFoundError } from '../../utils/errors.js';
 import { MimePolicy, DocumentErrors } from './document.constants.js';
@@ -28,6 +29,26 @@ export function validateUpload(mimeType: string | undefined, size: number): void
   }
 }
 
+/**
+ * Magic-number signatures for the types clients render inline (image / PDF
+ * previews). The declared MIME type is client-controlled, so a mismatch is
+ * rejected instead of letting arbitrary bytes masquerade as a previewable file.
+ */
+const SIGNATURES: Record<string, (b: Buffer) => boolean> = {
+  'application/pdf': (b) => b.subarray(0, 5).toString('latin1') === '%PDF-',
+  'image/png': (b) => b.length >= 8 && b.readUInt32BE(0) === 0x89504e47 && b.readUInt32BE(4) === 0x0d0a1a0a,
+  'image/jpeg': (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/gif': (b) => ['GIF87a', 'GIF89a'].includes(b.subarray(0, 6).toString('latin1')),
+  'image/webp': (b) => b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP',
+};
+
+export function assertContentMatchesType(mimeType: string, data: Buffer): void {
+  const check = SIGNATURES[mimeType];
+  if (check && !check(data)) {
+    throw badRequestError('File contents do not match the declared file type');
+  }
+}
+
 /** Stores bytes via the configured driver and persists metadata. */
 export async function storeDocument(
   boardId: number,
@@ -36,6 +57,7 @@ export async function storeDocument(
   elementId?: string,
 ) {
   validateUpload(file.mimetype, file.size);
+  assertContentMatchesType(file.mimetype, file.buffer);
 
   if (elementId) {
     const element = await prisma.elements.findUnique({
@@ -51,17 +73,23 @@ export async function storeDocument(
   const storage = getStorage();
   await storage.save(storageKey, file.buffer, file.mimetype);
 
-  return prisma.documents.create({
-    data: {
-      board_id: boardId,
-      user_id: userId,
-      element_id: elementId ?? null,
-      original_name: originalName,
-      stored_name: storageKey,
-      mime_type: file.mimetype,
-      size: file.size,
-    },
-  });
+  try {
+    return await prisma.documents.create({
+      data: {
+        board_id: boardId,
+        user_id: userId,
+        element_id: elementId ?? null,
+        original_name: originalName,
+        stored_name: storageKey,
+        mime_type: file.mimetype,
+        size: file.size,
+      },
+    });
+  } catch (err) {
+    // Metadata failed (e.g. board deleted mid-upload): don't orphan the bytes.
+    await storage.delete(storageKey).catch(() => undefined);
+    throw err;
+  }
 }
 
 export const listDocumentsByBoard = async (boardId: number) => {
@@ -76,11 +104,30 @@ export const getDocumentById = async (id: number) => {
   return prisma.documents.findUnique({ where: { id } });
 };
 
+/**
+ * Deletes the document row and strips the attachment from any element that
+ * still references it (bumping the element version), all in one transaction.
+ * Returns the affected element rows so callers can broadcast them.
+ */
 export const deleteDocument = async (id: number) => {
-  const doc = await prisma.documents.findUnique({ where: { id } });
-  if (!doc) throw notFoundError(DocumentErrors.NOT_FOUND);
-  await prisma.documents.delete({ where: { id } });
-  return doc;
+  return prisma.$transaction(async (tx) => {
+    const doc = await tx.documents.findUnique({ where: { id } });
+    if (!doc) throw notFoundError(DocumentErrors.NOT_FOUND);
+    await tx.documents.delete({ where: { id } });
+    const detached = await tx.$queryRaw<Array<{ id: string; element_data: Prisma.JsonValue }>>`
+      UPDATE "elements"
+         SET "element_data" = jsonb_set(
+               "element_data" - 'attachment',
+               '{version}',
+               to_jsonb(CASE WHEN jsonb_typeof("element_data"->'version') = 'number'
+                             THEN floor(("element_data"->>'version')::numeric)::int ELSE 0 END + 1)
+             ),
+             "updated_at" = now()
+       WHERE "board_id" = ${doc.board_id}
+         AND "element_data"->'attachment'->>'id' = ${String(id)}
+   RETURNING "id", "element_data"`;
+    return { doc, detached };
+  });
 };
 
-export default { sanitizeFileName, makeStorageKey, validateUpload, storeDocument, listDocumentsByBoard, getDocumentById, deleteDocument };
+export default { sanitizeFileName, makeStorageKey, validateUpload, assertContentMatchesType, storeDocument, listDocumentsByBoard, getDocumentById, deleteDocument };

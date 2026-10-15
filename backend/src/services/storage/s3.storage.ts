@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
+import { Readable } from 'node:stream';
 import type { StorageDriver } from './driver.js';
 
 interface S3Options {
@@ -58,6 +59,17 @@ export class S3StorageDriver implements StorageDriver {
       if (!body) return null;
       const bytes = await body.transformToByteArray();
       return Buffer.from(bytes);
+    } catch {
+      return null;
+    }
+  }
+
+  async stream(key: string): Promise<{ body: Readable; size?: number } | null> {
+    try {
+      const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+      if (!res.Body) return null;
+      const body = res.Body instanceof Readable ? res.Body : Readable.from(await res.Body.transformToByteArray());
+      return { body, size: res.ContentLength };
     } catch {
       return null;
     }

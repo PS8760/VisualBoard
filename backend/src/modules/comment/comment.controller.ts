@@ -4,6 +4,8 @@ import { createCommentSchema, updateCommentSchema, commentIdParamSchema, boardId
 import { parseOrThrow } from '../../utils/params.js';
 import { sendSuccess } from '../../utils/response.js';
 import { assertBoardAccess } from '../../services/rbac.js';
+import { emitToBoard } from '../socket/socket.bus.js';
+import { SocketEvents } from '../socket/socket.constants.js';
 import type { AuthRequest } from '../../middleware/auth.middleware.js';
 
 export const create = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -16,6 +18,8 @@ export const create = async (req: AuthRequest, res: Response, next: NextFunction
       x: parsed.x ?? null,
       y: parsed.y ?? null,
     });
+    // clientId lets the author's tab swap its optimistic copy for this one.
+    emitToBoard(boardId, SocketEvents.COMMENT_CREATED, { boardId, comment, clientId: parsed.clientId ?? null });
     sendSuccess(res, comment, 201);
   } catch (e) {
     next(e);
@@ -38,7 +42,8 @@ export const update = async (req: AuthRequest, res: Response, next: NextFunction
     const { boardId, commentId } = parseOrThrow(commentIdParamSchema, req.params);
     const parsed = parseOrThrow(updateCommentSchema, req.body);
     await assertBoardAccess(req.user, boardId);
-    const comment = await updateComment(commentId, req.user.id, parsed.content);
+    const comment = await updateComment(boardId, commentId, req.user.id, parsed.content);
+    emitToBoard(boardId, SocketEvents.COMMENT_UPDATED, { boardId, comment });
     sendSuccess(res, comment);
   } catch (e) {
     next(e);
@@ -49,7 +54,8 @@ export const remove = async (req: AuthRequest, res: Response, next: NextFunction
   try {
     const { boardId, commentId } = parseOrThrow(commentIdParamSchema, req.params);
     const role = await assertBoardAccess(req.user, boardId);
-    const comment = await deleteComment(commentId, req.user.id, role === 'owner');
+    const comment = await deleteComment(boardId, commentId, req.user.id, role === 'owner');
+    emitToBoard(boardId, SocketEvents.COMMENT_REMOVED, { boardId, id: comment.id });
     sendSuccess(res, { id: comment.id });
   } catch (e) {
     next(e);

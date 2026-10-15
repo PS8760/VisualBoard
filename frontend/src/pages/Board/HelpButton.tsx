@@ -1,24 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { HelpCircle, X, Keyboard, Mouse, Users, Save } from 'lucide-react';
-import { Tooltip } from '../../components/ui/Tooltip';
+import { X, Keyboard, Mouse, Users, Save, PlayCircle } from 'lucide-react';
+import { REPLAY_TOUR_EVENT } from '../../utils/shortcuts';
 
 export default function HelpButton() {
   const [show, setShow] = useState(false);
 
+  // Opened from the navigation island's "?" button or the ? key.
+  useEffect(() => {
+    const open = () => setShow(true);
+    window.addEventListener('vb:open-help', open);
+    return () => window.removeEventListener('vb:open-help', open);
+  }, []);
+
   return (
     <>
-      <div className="fixed bottom-6 right-6 z-30">
-        <Tooltip label="Help & Shortcuts" side="left">
-          <button
-            onClick={() => setShow(true)}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-accent text-paper shadow-lg transition-all duration-200 hover:scale-110 hover:shadow-xl"
-            aria-label="Show help"
-          >
-            <HelpCircle size={20} />
-          </button>
-        </Tooltip>
-      </div>
 
       <AnimatePresence>
         {show && (
@@ -44,7 +40,18 @@ export default function HelpButton() {
                 <X size={16} />
               </button>
 
-              <h2 className="mb-6 text-2xl font-semibold text-ink">Quick Reference Guide</h2>
+              <div className="mb-6 flex flex-wrap items-center gap-3 pr-10">
+                <h2 className="text-2xl font-semibold text-ink">Quick Reference Guide</h2>
+                <button
+                  onClick={() => {
+                    setShow(false);
+                    window.dispatchEvent(new Event(REPLAY_TOUR_EVENT));
+                  }}
+                  className="flex h-8 items-center gap-1.5 rounded-sm border border-line-2 px-3 text-[12px] font-medium text-ink-2 transition-colors hover:bg-paper-2 hover:text-ink"
+                >
+                  <PlayCircle size={13} /> Replay tour
+                </button>
+              </div>
 
               {/* Drawing Tools */}
               <section className="mb-6">
@@ -59,11 +66,15 @@ export default function HelpButton() {
                   <HelpItem shortcut="R" description="Rectangle - Click & drag to draw" />
                   <HelpItem shortcut="O" description="Circle - Click & drag to draw" />
                   <HelpItem shortcut="L" description="Line - Draw straight lines" />
-                  <HelpItem shortcut="A" description="Arrow - Draw arrows between elements" />
+                  <HelpItem shortcut="A" description="Connector - Drag from shape to shape; it stays attached when they move" />
                   <HelpItem shortcut="T" description="Text - Click to add text" />
                   <HelpItem shortcut="S" description="Sticky Note - Add yellow sticky notes" />
+                  <HelpItem shortcut="I" description="Image - Place an image on the canvas" />
                   <HelpItem shortcut="D" description="Document - Attach files" />
                   <HelpItem shortcut="C" description="Comment - Add comments" />
+                  <HelpItem shortcut="K" description="Laser pointer - Fading trail everyone sees" />
+                  <HelpItem shortcut="↵" description="Edit the label of the selected shape (or double-click)" />
+                  <HelpItem shortcut="Hold" description="Pen - Hold still at the end of a stroke to snap it to a shape" />
                 </div>
               </section>
 
@@ -108,12 +119,18 @@ export default function HelpButton() {
                     <HelpItem shortcut="⌘ Z" description="Undo" />
                     <HelpItem shortcut="⌘ ⇧ Z" description="Redo" />
                     <HelpItem shortcut="Del" description="Delete" />
+                    <HelpItem shortcut="⌘ ] / ⌘ [" description="Bring to front / send to back" />
+                    <HelpItem shortcut="⌘ L" description="Lock / unlock" />
                   </div>
                   <div className="space-y-2 rounded-md bg-paper-2 p-4">
                     <h4 className="mb-2 text-[11px] font-mono uppercase tracking-wide text-ink-3">
                       View
                     </h4>
                     <HelpItem shortcut="Space" description="Temporary pan" />
+                    <HelpItem shortcut="⇧ 1" description="Fit to content" />
+                    <HelpItem shortcut="M" description="Toggle minimap" />
+                    <HelpItem shortcut="⌘ ." description="Zen mode (hide all UI)" />
+                    <HelpItem shortcut="Alt" description="Hold while moving to skip smart guides" />
                     <HelpItem shortcut="1" description="100% zoom" />
                     <HelpItem shortcut="2" description="50% zoom" />
                     <HelpItem shortcut="0" description="Fit canvas" />

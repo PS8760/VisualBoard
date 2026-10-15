@@ -4,22 +4,35 @@ import {
   Circle,
   Line,
   IText,
+  Textbox,
   Group,
   Path,
   FabricImage,
   FabricObject,
-  type FabricObjectProps,
+  util,
   type TPointerEventInfo,
   type TPointerEvent,
 } from 'fabric';
 import type { AttachmentMeta, BoardElement, ElementKind } from '../types';
 import { uid } from '../utils';
+import { ConnectorShape } from './connectors/shape';
+export { ConnectorShape } from './connectors/shape';
+import { readConnector } from './connectors/model';
+
+/*
+ * Fabric 7 positions objects by their CENTER by default. Every coordinate in
+ * this app (element x/y, overlays, auto-arrange, the backend layout engine,
+ * persisted data) is top-left based, so pin the origin globally before any
+ * object is constructed. Without this, shapes jumped by half their size on
+ * creation and attachment/comment overlays drifted off their elements.
+ */
+FabricObject.ownDefaults.originX = 'left';
+FabricObject.ownDefaults.originY = 'top';
 
 export interface VBData {
   id?: string;
   kind?: ElementKind;
   attachment?: AttachmentMeta | null;
-  commentCount?: number;
 }
 
 /** A fabric path segment, e.g. ["M", x, y] or ["Q", cx, cy, x, y]. */
@@ -51,6 +64,9 @@ export const CANVAS_COLORS = {
   commentFill: '#d9480f',
 };
 
+export { isDarkTheme, themeInk } from './ink';
+import { themeInk } from './ink';
+
 /** Shown in a freshly created text element until the user types. */
 export const TEXT_PLACEHOLDER = 'Type something…';
 
@@ -64,41 +80,113 @@ export function elementKind(obj: FabricObject): ElementKind | undefined {
   return asVB(obj).data?.kind;
 }
 
-/** Custom arrow: Line subclass that renders an arrowhead at the end point. */
-class ArrowLine extends Line {
-  static override type = 'Arrow';
-  arrowSize = 9;
+/* ------------------------------------------------------------------------ */
+/* Labelled shapes                                                          */
+/* ------------------------------------------------------------------------ */
+
+export const LABEL_COLOR = '#1b1a17';
+const LABEL_FONT = 'Inter, ui-sans-serif, system-ui, sans-serif';
+
+/** Word-wraps `text` into lines no wider than `maxWidth` (hard-breaks long words). */
+export function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const out: string[] = [];
+  for (const paragraph of text.split('\n')) {
+    let line = '';
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (ctx.measureText(candidate).width <= maxWidth || !line) {
+        line = candidate;
+        // Hard-break a single word wider than the box.
+        while (ctx.measureText(line).width > maxWidth && line.length > 1) {
+          let cut = line.length - 1;
+          while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > maxWidth) cut--;
+          out.push(line.slice(0, cut));
+          line = line.slice(cut);
+        }
+      } else {
+        out.push(line);
+        line = word;
+      }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/** Draws a centered, wrapped label inside a w×h box centered on the origin. */
+function drawLabel(ctx: CanvasRenderingContext2D, label: string, w: number, h: number, size: number, color: string) {
+  if (!label) return;
+  ctx.save();
+  ctx.font = `500 ${size}px ${LABEL_FONT}`;
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lineHeight = size * 1.3;
+  const maxLines = Math.max(1, Math.floor((h - 8) / lineHeight));
+  let lines = wrapText(ctx, label, Math.max(8, w - 16));
+  if (lines.length > maxLines) {
+    lines = lines.slice(0, maxLines);
+    lines[maxLines - 1] = `${lines[maxLines - 1]!.replace(/.$/, '')}…`;
+  }
+  const startY = -((lines.length - 1) * lineHeight) / 2;
+  lines.forEach((line, i) => ctx.fillText(line, 0, startY + i * lineHeight));
+  ctx.restore();
+}
+
+interface Labelled {
+  label: string;
+  labelSize: number;
+  labelColor: string;
+  /** Hidden while the DOM label editor is open so text isn't drawn twice. */
+  labelHidden: boolean;
+}
+
+/** Rectangle that renders its element `content` as a centered, wrapped label. */
+export class LabeledRect extends Rect implements Labelled {
+  static override type = 'LabeledRect';
+  label = '';
+  labelSize = 14;
+  labelColor = LABEL_COLOR;
+  labelHidden = false;
 
   override _render(ctx: CanvasRenderingContext2D) {
     super._render(ctx);
-    const p = this.calcLinePoints();
-    const angle = Math.atan2(p.y2 - p.y1, p.x2 - p.x1);
-    ctx.save();
-    ctx.fillStyle = this.stroke as string;
-    ctx.translate(p.x2, p.y2);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.moveTo(-this.arrowSize, -this.arrowSize * 0.42);
-    ctx.lineTo(0, 0);
-    ctx.lineTo(-this.arrowSize, this.arrowSize * 0.42);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+    if (!this.labelHidden) drawLabel(ctx, this.label, this.width, this.height, this.labelSize, this.labelColor);
   }
 }
 
-type ArrowOptions = Partial<FabricObjectProps> & {
-  left?: number;
-  top?: number;
-  data?: VBData;
-};
+/** Circle with the same label behaviour (wrapped within the inscribed square). */
+export class LabeledCircle extends Circle implements Labelled {
+  static override type = 'LabeledCircle';
+  label = '';
+  labelSize = 14;
+  labelColor = LABEL_COLOR;
+  labelHidden = false;
 
-function makeArrow(points: [number, number, number, number], options: ArrowOptions = {}): ArrowLine {
-  return new ArrowLine(points, {
-    stroke: CANVAS_COLORS.lineStroke,
-    strokeWidth: 1.75,
-    ...options,
+  override _render(ctx: CanvasRenderingContext2D) {
+    super._render(ctx);
+    const side = (this.radius ?? 0) * Math.SQRT2;
+    if (!this.labelHidden) drawLabel(ctx, this.label, side, side, this.labelSize, this.labelColor);
+  }
+}
+
+export function isLabelled(obj: FabricObject | null | undefined): obj is (LabeledRect | LabeledCircle) {
+  return obj instanceof LabeledRect || obj instanceof LabeledCircle;
+}
+
+/** Locked elements stay selectable (to unlock them) but can't be transformed. */
+export function applyLock(obj: FabricObject, locked: boolean | undefined) {
+  if (!locked) return obj;
+  obj.set({
+    lockMovementX: true,
+    lockMovementY: true,
+    lockScalingX: true,
+    lockScalingY: true,
+    lockRotation: true,
+    hasControls: false,
+    hoverCursor: 'not-allowed',
   });
+  return obj;
 }
 
 interface MaterialOptions {
@@ -106,37 +194,63 @@ interface MaterialOptions {
   evented?: boolean;
 }
 
+const DASHES: Record<string, number[] | null> = { solid: null, dashed: [10, 7], dotted: [1.5, 6] };
+
 export function materializeElement(el: BoardElement, opts: MaterialOptions = {}): FabricObject {
+  const obj = buildObject(el, opts);
+  const dash = el.strokeStyle ? DASHES[el.strokeStyle] : null;
+  if (dash && el.kind !== 'text' && el.kind !== 'sticky' && el.kind !== 'document') {
+    obj.set({ strokeDashArray: dash, strokeLineCap: 'round' });
+  }
+  return applyLock(obj, el.locked);
+}
+
+
+
+function buildObject(el: BoardElement, opts: MaterialOptions): FabricObject {
   const shared = {
     left: el.x,
     top: el.y,
     angle: el.rotation,
+    scaleX: el.scaleX ?? 1,
+    scaleY: el.scaleY ?? 1,
     opacity: el.opacity ?? 1,
     selectable: opts.selectable ?? true,
     evented: opts.evented ?? true,
-    data: { id: el.id, kind: el.kind, attachment: el.attachment, commentCount: el.commentCount },
+    data: { id: el.id, kind: el.kind, attachment: el.attachment },
   };
 
   switch (el.kind) {
-    case 'rect':
-      return new Rect({
+    case 'rect': {
+      const rect = new LabeledRect({
         ...shared,
         width: el.width,
         height: el.height,
         rx: el.radius ?? 8,
         ry: el.radius ?? 8,
         fill: el.fill || CANVAS_COLORS.nodeFill,
-        stroke: el.stroke || CANVAS_COLORS.nodeStroke,
-        strokeWidth: el.strokeWidth || 1.5,
+        stroke: themeInk(el.stroke || CANVAS_COLORS.nodeStroke),
+        strokeWidth: el.strokeWidth ?? 1.5,
       });
-    case 'circle':
-      return new Circle({
+      rect.label = el.content ?? '';
+      rect.labelSize = el.fontSize ?? 14;
+      // Labels sit on the shape's fill; on a see-through shape they sit on the canvas.
+      rect.labelColor = el.fill === 'transparent' ? themeInk(el.textColor ?? LABEL_COLOR)! : el.textColor ?? LABEL_COLOR;
+      return rect;
+    }
+    case 'circle': {
+      const circle = new LabeledCircle({
         ...shared,
         radius: Math.min(el.width, el.height) / 2,
         fill: el.fill || CANVAS_COLORS.nodeFill,
-        stroke: el.stroke || CANVAS_COLORS.nodeStroke,
-        strokeWidth: el.strokeWidth || 1.5,
+        stroke: themeInk(el.stroke || CANVAS_COLORS.nodeStroke),
+        strokeWidth: el.strokeWidth ?? 1.5,
       });
+      circle.label = el.content ?? '';
+      circle.labelSize = el.fontSize ?? 14;
+      circle.labelColor = el.fill === 'transparent' ? themeInk(el.textColor ?? LABEL_COLOR)! : el.textColor ?? LABEL_COLOR;
+      return circle;
+    }
     case 'sticky': {
       const bg = new Rect({
         width: el.width,
@@ -149,16 +263,19 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
         selectable: false,
         evented: false,
       });
-      const text = new IText(el.content ?? 'Write a note…', {
-        left: 10,
-        top: 10,
-        width: el.width - 20,
-        fontSize: el.fontSize ?? 13,
+      // Textbox (not IText) so the note's text wraps inside the note.
+      const text = new Textbox(el.content ?? 'Write a note…', {
+        left: 12,
+        top: 12,
+        width: Math.max(20, el.width - 24),
+        fontSize: el.fontSize ?? 14,
+        lineHeight: 1.25,
         fontFamily: 'Inter',
         fill: '#4a3f16',
         selectable: false,
         evented: false,
         editable: false,
+        splitByGrapheme: false,
       });
       const group = new Group([bg, text], {
         ...shared,
@@ -170,23 +287,16 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
       return group;
     }
     case 'line':
-      return new Line((el.points ?? [el.x, el.y, el.x + el.width, el.y]) as [number, number, number, number], {
-        ...shared,
-        left: el.x,
-        top: el.y,
-        stroke: el.stroke || CANVAS_COLORS.lineStroke,
-        strokeWidth: el.strokeWidth || 1.75,
-      });
     case 'arrow':
-      return makeArrow((el.points ?? [el.x, el.y, el.x + el.width, el.y]) as [number, number, number, number], {
-        ...shared,
-        left: el.x,
-        top: el.y,
-        stroke: el.stroke || CANVAS_COLORS.lineStroke,
-        strokeWidth: el.strokeWidth || 1.75,
-      });
+      // Routed, anchored connector (see services/connectors).
+      return new ConnectorShape(readConnector(el), el.id, {
+        selectable: shared.selectable,
+        evented: shared.evented,
+        opacity: shared.opacity,
+        data: shared.data,
+      } as Partial<FabricObject>) as unknown as FabricObject;
     case 'pen': {
-      const stroke = el.stroke || CANVAS_COLORS.penStroke;
+      const stroke = themeInk(el.stroke || CANVAS_COLORS.penStroke)!;
       const strokeWidth = el.strokeWidth || 2;
       const penShared = {
         ...shared,
@@ -222,7 +332,7 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
         ...shared,
         fontSize: el.fontSize ?? 18,
         fontFamily: 'Inter',
-        fill: '#1b1a17',
+        fill: themeInk(el.textColor ?? '#1b1a17'),
       });
     case 'document': {
       const bg = new Rect({
@@ -253,18 +363,26 @@ export function materializeElement(el: BoardElement, opts: MaterialOptions = {})
       });
     }
     case 'image': {
+      // Size from the element (displayed size), not the bitmap: the bitmap
+      // loads asynchronously and has no dimensions yet, so computing a scale
+      // here divided by zero.
       const imgEl = new Image();
-      imgEl.src = el.content;
       const img = new FabricImage(imgEl, {
         ...shared,
-        left: el.x,
-        top: el.y,
+        scaleX: 1,
+        scaleY: 1,
         width: el.width,
         height: el.height,
         objectCaching: false,
       });
-      img.scaleToWidth(el.width);
-      img.scaleToHeight(el.height);
+      imgEl.onload = () => {
+        const w = imgEl.naturalWidth || el.width;
+        const h = imgEl.naturalHeight || el.height;
+        img.set({ width: w, height: h, scaleX: el.width / w, scaleY: el.height / h });
+        img.setCoords();
+        img.canvas?.requestRenderAll();
+      };
+      imgEl.src = el.content;
       return img;
     }
     case 'comment':
@@ -306,22 +424,42 @@ export function serializeElement(obj: FabricObject): BoardElement | null {
     width: obj.width ?? 0,
     height: obj.height ?? 0,
     rotation: obj.angle ?? 0,
+    scaleX: obj.scaleX ?? 1,
+    scaleY: obj.scaleY ?? 1,
     fill: (obj.fill as string) ?? '#fafaf8',
     stroke: (obj.stroke as string) ?? '#c2c0b5',
     strokeWidth: obj.strokeWidth ?? 1.5,
     content: '',
     attachment: data.attachment ?? null,
-    commentCount: data.commentCount ?? 0,
-    version: 1,
+    version: 0,
   } as BoardElement;
 
+  if (obj instanceof ConnectorShape) {
+    return { ...common, fill: 'transparent', content: '', ...obj.toElementPatch() } as BoardElement;
+  }
   if (obj instanceof Line) {
-    const p = (obj as unknown as { calcLinePoints: () => { x1: number; y1: number; x2: number; y2: number } }).calcLinePoints();
+    // Temporary drawing preview (always unrotated): absolute endpoints.
+    const { x1, y1, x2, y2 } = obj as unknown as { x1: number; y1: number; x2: number; y2: number };
     return {
       ...common,
+      x: Math.min(x1, x2),
+      y: Math.min(y1, y2),
+      width: Math.abs(x2 - x1),
+      height: Math.abs(y2 - y1),
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      fill: 'transparent',
       content: '',
-      points: [p.x1, p.y1, p.x2, p.y2],
+      points: [x1, y1, x2, y2],
+      pointsAbsolute: true,
     };
+  }
+  if (isLabelled(obj)) {
+    const base = obj instanceof LabeledCircle
+      ? { width: (obj.radius ?? 1) * 2, height: (obj.radius ?? 1) * 2 }
+      : {};
+    return { ...common, ...base, content: obj.label, fontSize: obj.labelSize };
   }
   if (obj instanceof Path) {
     const segments = obj.path as unknown as TPathData;
@@ -338,17 +476,72 @@ export function serializeElement(obj: FabricObject): BoardElement | null {
     return { ...common, content: obj.text ?? '', fontSize: obj.fontSize };
   }
   if (obj instanceof FabricImage) {
-    return { ...common, content: (obj.getElement() as HTMLImageElement).src ?? '' };
+    // Images persist their displayed size; the bitmap scale is derived on load.
+    return {
+      ...common,
+      width: obj.getScaledWidth(),
+      height: obj.getScaledHeight(),
+      scaleX: 1,
+      scaleY: 1,
+      content: (obj.getElement() as HTMLImageElement).src ?? '',
+    };
   }
   if (obj instanceof Group) {
-    const textObj = obj.getObjects().find((o) => o instanceof IText) as IText | undefined;
-    return { ...common, content: textObj?.text ?? '', fontSize: textObj?.fontSize };
+    const children = obj.getObjects();
+    const textObj = children.find((o) => o instanceof IText) as IText | undefined;
+    // Group bounds include the background stroke; persisting them made cards
+    // grow by a pixel on every save. The background rect is the true size.
+    const bg = children.find((o) => o instanceof Rect) as Rect | undefined;
+    return {
+      ...common,
+      width: bg?.width ?? common.width,
+      height: bg?.height ?? common.height,
+      fill: (bg?.fill as string) ?? common.fill,
+      stroke: (bg?.stroke as string) ?? common.stroke,
+      content: textObj?.text ?? '',
+      fontSize: textObj?.fontSize,
+    };
   }
   if (obj instanceof Circle) {
     const r = obj.radius ?? 1;
     return { ...common, width: r * 2, height: r * 2, fill: obj.fill as string, stroke: obj.stroke as string };
   }
   return common;
+}
+
+/** Key-order independent JSON (jsonb from the server reorders keys). */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .filter((k) => (value as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical((value as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * Everything that affects how an element renders. Server bookkeeping
+ * (version, legacy counters) is excluded so an ack that only bumps the
+ * version never forces the canvas object to be rebuilt.
+ */
+export function renderSignature(el: BoardElement): string {
+  const { version: _version, commentCount: _count, ...rest } = el;
+  void _version;
+  void _count;
+  return canonical(rest);
+}
+
+/**
+ * World-space center, rotation and scale of an object — correct even for
+ * members of an ActiveSelection, whose own left/top/angle are relative to the
+ * selection rather than the canvas.
+ */
+export function worldTransform(obj: FabricObject) {
+  const d = util.qrDecompose(obj.calcTransformMatrix());
+  return { cx: d.translateX, cy: d.translateY, angle: d.angle, scaleX: d.scaleX, scaleY: d.scaleY };
 }
 
 export const GRID_SIZE = 20;
@@ -367,7 +560,7 @@ export interface DrawingState {
   object: FabricObject | null;
   kind: ElementKind;
   origin: { x: number; y: number };
-  type: 'shape' | 'text' | 'comment';
+  type: 'shape' | 'text';
 }
 
 /** Dimension info emitted during live drawing for the HUD overlay. */
@@ -404,15 +597,11 @@ export function startDrawing(canvas: Canvas, kind: ElementKind, point: { x: numb
       object = new Line([point.x, point.y, point.x, point.y], { ...common, left: 0, top: 0, stroke: CANVAS_COLORS.lineStroke, strokeWidth: 1.75 });
       break;
     case 'arrow':
-      object = makeArrow([point.x, point.y, point.x, point.y], { ...common, left: 0, top: 0 });
+      object = new Line([point.x, point.y, point.x, point.y], { ...common, left: 0, top: 0, stroke: CANVAS_COLORS.accentStroke, strokeWidth: 1.75, strokeDashArray: [6, 4] });
       break;
     case 'text':
-      object = new IText('Type…', { ...common, left: point.x, top: point.y, fontSize: 18, fontFamily: 'Inter', fill: '#1b1a17' });
+      object = new IText('Type…', { ...common, left: point.x, top: point.y, fontSize: 18, fontFamily: 'Inter', fill: themeInk('#1b1a17') });
       type = 'text';
-      break;
-    case 'comment':
-      object = new Circle({ ...common, radius: 9, fill: CANVAS_COLORS.commentFill, stroke: '#ffffff', strokeWidth: 2 });
-      type = 'comment';
       break;
     case 'image':
     case 'document':
@@ -535,12 +724,17 @@ export function endDrawing(
 
   const el = serializeElement(obj);
   if (!el) return null;
-  el.id = uid(state.kind === 'comment' ? 'cm' : 'el');
+  el.id = uid('el');
 
   // Ensure preview styling (semi-transparent) does not persist into final element
-  if (state.kind === 'rect' || state.kind === 'sticky') {
-    el.fill = el.fill ?? CANVAS_COLORS.nodeFill;
-    el.stroke = el.stroke ?? CANVAS_COLORS.nodeStroke;
+  // Drop the translucent preview fill — the final shape is solid.
+  if (state.kind === 'rect') {
+    el.fill = CANVAS_COLORS.nodeFill;
+    el.stroke = CANVAS_COLORS.nodeStroke;
+  }
+  if (state.kind === 'circle') {
+    el.fill = CANVAS_COLORS.nodeFill;
+    el.stroke = CANVAS_COLORS.nodeStroke;
   }
 
   // For sticky notes, ensure proper fill color and add default text

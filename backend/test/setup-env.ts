@@ -8,5 +8,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'test-only-secret-that-is-lon
 process.env.STORAGE_LOCAL_DIR = process.env.STORAGE_LOCAL_DIR ?? '/tmp/vb-test-uploads';
 process.env.FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:5174';
 process.env.LOG_LEVEL = 'silent';
+// The suggestions suite stubs fetch; it only needs the feature to be "configured".
+process.env.GROQ_API_KEY = process.env.GROQ_API_KEY ?? 'test-groq-key';
 
 export {}

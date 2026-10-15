@@ -1,19 +1,30 @@
 import { create } from 'zustand';
+import { toast } from 'sonner';
 import type { PresenceUser, Tool } from '../types';
-import { throttle } from '../utils';
+import { colorForUser, throttleTrailing } from '../utils';
 import { DEMO_USERS } from '../data/demo';
 import { useBoardStore } from './useBoardStore';
+import { useAuthStore } from './useAuthStore';
+import { addLaserPoint, setLaserSender } from '../services/laser';
 
-export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'offline';
+export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
 export type PresenceMode = 'live' | 'simulated' | 'none';
+export type BoardRole = 'owner' | 'editor' | 'viewer';
 
 interface PresenceState {
   users: PresenceUser[];
   status: ConnectionStatus;
   mode: PresenceMode;
   socket: unknown;
+  /** Board the socket has an acknowledged room membership for. */
+  joinedBoardId: string | null;
+  /** Role the server reported on join. */
+  role: BoardRole | null;
+  /** Authenticated user id (string) — used to recognise our own broadcasts. */
+  selfUserId: string | null;
   connect: (boardId: string) => void;
   disconnect: () => void;
+  rejoin: () => void;
   updateLocalCursor: (x: number, y: number, tool: Tool) => void;
   addUser: (user: Omit<PresenceUser, 'isLocal'>) => void;
   addLocalUser: (user: Omit<PresenceUser, 'isLocal'>) => void;
@@ -27,14 +38,24 @@ const WAYPOINTS: Array<[number, number]> = [
   [160, -180], [200, -30], [-40, 250], [-600, -30], [-760, -60], [-880, -140], [-880, -90],
 ];
 
-const PRESENCE_COLORS = ['#d9480f', '#2f9e44', '#1971c2', '#e8590c', '#7048e8', '#0c8599'];
-
 interface SocketLike {
   id?: string;
+  connected: boolean;
+  io: { on: (event: string, fn: (...args: unknown[]) => void) => void };
+  connect: () => void;
   close: () => void;
-  emit: (event: string, payload: unknown) => void;
-  on: (event: string, fn: (...args: unknown[]) => void) => void;
-  once: (event: string, fn: (...args: unknown[]) => void) => void;
+  disconnect: () => void;
+  emit: (event: string, ...args: unknown[]) => void;
+  timeout: (ms: number) => { emit: (event: string, payload: unknown, cb: (err: Error | null, res: JoinAck) => void) => void };
+  on: (event: string, fn: (...args: never[]) => void) => void;
+}
+
+interface JoinAck {
+  ok: boolean;
+  role?: BoardRole;
+  users?: RemotePresenceUser[];
+  code?: string;
+  message?: string;
 }
 
 interface RemotePresenceUser {
@@ -73,24 +94,25 @@ function makeSimulatedUsers(): PresenceUser[] {
   }));
 }
 
+const toLiveBoardId = (boardId: string): number | null => {
+  if (!/^\d+$/.test(boardId)) return null;
+  const parsed = Number(boardId);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
 export const usePresenceStore = create<PresenceState>((set, get) => {
   let simTimer: ReturnType<typeof setInterval> | null = null;
   let activeBoardId: string | null = null;
+  /** Bumped on every connect/disconnect so late async work can detect it is stale. */
+  let generation = 0;
+  let detachWindow: (() => void) | null = null;
   const simOffsets: Record<string, number> = {};
   const waypointIndex: Record<string, number> = {};
 
-  const toLiveBoardId = (boardId: string): number | null => {
-    if (!/^\d+$/.test(boardId)) return null;
-    const parsed = Number(boardId);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-  };
-
-  const remoteColor = (index: number) => PRESENCE_COLORS[index % PRESENCE_COLORS.length] ?? PRESENCE_COLORS[0];
-
-  const normalizeRemoteUser = (user: RemotePresenceUser, index: number): PresenceUser => ({
+  const normalizeRemoteUser = (user: RemotePresenceUser): PresenceUser => ({
     id: String(user.id),
     name: user.name || profileNameFor(user.userId) || 'User',
-    color: user.color ?? remoteColor(index),
+    color: user.color ?? colorForUser(user.userId ?? user.id),
     // board:users payloads carry no cursor — render nothing until the first
     // cursor:update arrives instead of spawning a phantom arrow at (0,0).
     ...(user.cursor ? { cursor: user.cursor, lastSeen: Date.now() } : {}),
@@ -98,15 +120,15 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
   });
 
   const setRemoteUsers = (remoteUsers: RemotePresenceUser[], selfSocketId?: string) => {
-    set((s) => {
-      const localUsers = s.users.filter((u) => u.isLocal);
-      const remotes = remoteUsers
-        .filter((u) => String(u.id) !== selfSocketId)
-        .map((u, index) => normalizeRemoteUser(u, index));
-      return { users: [...localUsers, ...remotes] };
-    });
+    set((s) => ({
+      users: [
+        ...s.users.filter((u) => u.isLocal),
+        ...remoteUsers.filter((u) => String(u.id) !== selfSocketId).map(normalizeRemoteUser),
+      ],
+    }));
   };
 
+  /** Demo/preview boards only — real boards never show fabricated collaborators. */
   const startSimulation = () => {
     const users = makeSimulatedUsers();
     users.forEach((u, i) => {
@@ -131,8 +153,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
           const wobble = Math.sin(Date.now() / 900 + offset) * 6;
           const dx = target[0] - u.cursor.x;
           const dy = target[1] - u.cursor.y;
-          const dist = Math.hypot(dx, dy);
-          if (dist < 6) waypointIndex[u.id] = idx + 1;
+          if (Math.hypot(dx, dy) < 6) waypointIndex[u.id] = idx + 1;
           return {
             ...u,
             cursor: {
@@ -154,33 +175,53 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
     }
   };
 
-  const broadcastCursor = throttle((x: number, y: number, tool: Tool) => {
-    const { socket, mode, users } = get();
-    const local = users.find((u) => u.isLocal);
-    const boardId = activeBoardId ? toLiveBoardId(activeBoardId) : null;
-    if (!local || !boardId) return;
-    if (mode === 'live' && socket) {
-      (socket as { emit: (e: string, p: unknown) => void }).emit('cursor:update', {
-        boardId,
-        x, y, tool,
-      });
-    }
+  // Leading + trailing: the final resting position is always delivered.
+  const broadcastCursor = throttleTrailing((x: number, y: number, tool: Tool) => {
+    const { socket, mode, joinedBoardId } = get();
+    const boardId = joinedBoardId ? toLiveBoardId(joinedBoardId) : null;
+    if (!boardId || mode !== 'live' || !socket) return;
+    (socket as SocketLike).emit('cursor:update', { boardId, x, y, tool });
   }, 50);
+
+  const join = (socket: SocketLike, boardId: string, gen: number) => {
+    const liveId = toLiveBoardId(boardId);
+    if (!liveId) return;
+    socket.timeout(8_000).emit('board:join', { boardId: liveId }, (err, res) => {
+      if (gen !== generation) return;
+      if (err) {
+        // No ack in time — try again while the socket is up.
+        if (socket.connected) setTimeout(() => gen === generation && join(socket, boardId, gen), 1_000);
+        return;
+      }
+      if (!res?.ok) {
+        set({ status: 'offline', joinedBoardId: null });
+        toast.error('Could not join the live session', { id: 'vb-join', description: res?.message });
+        return;
+      }
+      setRemoteUsers(res.users ?? [], socket.id);
+      set({ status: 'connected', mode: 'live', joinedBoardId: boardId, role: res.role ?? null });
+      useBoardStore.getState().setCanEdit(res.role !== 'viewer');
+    });
+  };
 
   return {
     users: [],
     status: 'idle',
     mode: 'none',
     socket: null,
+    joinedBoardId: null,
+    role: null,
+    selfUserId: null,
 
     connect: async (boardId) => {
       const { status } = get();
-      if ((status === 'connecting' || status === 'connected') && activeBoardId === boardId) return;
+      if ((status === 'connecting' || status === 'connected' || status === 'reconnecting') && activeBoardId === boardId) return;
+      const gen = ++generation;
       activeBoardId = boardId;
-      set({ status: 'connecting' });
+      const selfUserId = useAuthStore.getState().user?.id ?? null;
+      set({ status: 'connecting', joinedBoardId: null, role: null, selfUserId });
 
       const liveBoardId = toLiveBoardId(boardId);
-      const { io } = await import('socket.io-client');
       const token = localStorage.getItem('vb_token');
       if (!token || !liveBoardId) {
         stopSimulation();
@@ -188,113 +229,191 @@ export const usePresenceStore = create<PresenceState>((set, get) => {
         return;
       }
 
+      const { io } = await import('socket.io-client');
+      // disconnect()/another connect() ran while the module was loading.
+      if (gen !== generation) return;
+
       const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, {
         transports: ['websocket', 'polling'],
         auth: { token },
-        timeout: 2500,
-      });
+        timeout: 8_000,
+        // Exponential backoff with jitter; never gives up while the board is open.
+        reconnection: true,
+        reconnectionDelay: 500,
+        reconnectionDelayMax: 10_000,
+        randomizationFactor: 0.5,
+      }) as unknown as SocketLike;
 
-      const fail = () => {
-        socket.close();
-        stopSimulation();
-        startSimulation();
-      };
+      set({ socket, mode: 'live' });
 
       socket.on('connect', () => {
-        set({ status: 'connected', mode: 'live', socket });
-        socket.emit('board:join', { boardId: liveBoardId });
+        if (gen !== generation) return;
+        set({ status: 'connecting' });
+        join(socket, boardId, gen);
       });
 
-      socket.on('connect_error', () => {
-        set({ status: 'offline' });
-        stopSimulation();
-        startSimulation();
+      socket.on('disconnect', (reason: string) => {
+        if (gen !== generation) return;
+        // Remote presence is re-sent on rejoin; stale arrows would linger.
+        set((s) => ({
+          users: s.users.filter((u) => u.isLocal),
+          joinedBoardId: null,
+          // A client-side disconnect here only happens for the offline pause.
+          status: reason === 'io client disconnect' ? 'offline' : 'reconnecting',
+        }));
+        // A server-initiated disconnect does not auto-reconnect in socket.io.
+        if (reason === 'io server disconnect') socket.connect();
+      });
+
+      socket.on('connect_error', (err: Error) => {
+        if (gen !== generation) return;
+        if (err?.message === 'ERR_UNAUTHORIZED') {
+          socket.disconnect();
+          set({ status: 'offline' });
+          toast.error('Your session has expired', { id: 'vb-auth', description: 'Sign in again to keep collaborating.' });
+          return;
+        }
+        set({ status: 'reconnecting' });
+      });
+
+      socket.io.on('reconnect_attempt', () => {
+        if (gen === generation && get().status !== 'connected') set({ status: 'reconnecting' });
       });
 
       socket.on('board:users', (users: RemotePresenceUser[]) => {
-        setRemoteUsers(Array.isArray(users) ? users : [], (socket as SocketLike).id);
+        if (gen === generation) setRemoteUsers(Array.isArray(users) ? users : [], socket.id);
       });
       socket.on('user:join', (user: RemotePresenceUser) => {
-        if (String(user.id) !== (socket as SocketLike).id) get().addUser(normalizeRemoteUser(user, get().users.length));
+        if (gen === generation && String(user.id) !== socket.id) get().addUser(normalizeRemoteUser(user));
       });
-      socket.on('user:leave', ({ id }: { id: string | number }) => get().removeUser(String(id)));
+      socket.on('user:leave', ({ id }: { id: string | number }) => {
+        if (gen === generation) get().removeUser(String(id));
+      });
+      // Laser pointer relay (ephemeral). Throttled per frame by the caller.
+      setLaserSender((p) => {
+        const { joinedBoardId } = get();
+        const live = joinedBoardId ? toLiveBoardId(joinedBoardId) : null;
+        if (gen === generation && live && socket.connected) {
+          (socket as unknown as { volatile: { emit: (e: string, v: unknown) => void } }).volatile.emit('laser:point', { boardId: live, ...p });
+        }
+      });
+      socket.on('laser:point', (payload: { id: string; userId?: string | number; x: number; y: number; start?: boolean }) => {
+        if (gen !== generation) return;
+        const user = get().users.find((u) => u.id === String(payload.id));
+        const color = user?.color ?? colorForUser(payload.userId ?? payload.id);
+        addLaserPoint(String(payload.id), color, payload, user?.name ?? profileNameFor(payload.userId) ?? undefined, payload.start);
+      });
+
       socket.on('cursor:update', (payload: CursorPayload) => {
-        set((s) => ({
-          users: s.users.some((u) => !u.isLocal && (u.id === String(payload.id) || u.id === String(payload.userId)))
-            ? s.users.map((u) =>
-                !u.isLocal && (u.id === String(payload.id) || u.id === String(payload.userId))
-                  ? {
-                      ...u,
-                      // Upgrade placeholder names with the real profile name.
-                      name: u.name === 'User' ? (profileNameFor(payload.userId) ?? 'User') : u.name,
-                      cursor: { x: payload.x, y: payload.y, tool: payload.tool },
-                      lastSeen: Date.now(),
-                    }
-                  : u,
-              )
-            : [
+        if (gen !== generation) return;
+        const key = String(payload.id);
+        set((s) => {
+          const exists = s.users.some((u) => !u.isLocal && u.id === key);
+          if (!exists) {
+            return {
+              users: [
                 ...s.users,
                 {
-                  id: String(payload.id),
+                  id: key,
                   name: profileNameFor(payload.userId) ?? 'User',
-                  color: remoteColor(s.users.length),
+                  color: colorForUser(payload.userId ?? key),
                   cursor: { x: payload.x, y: payload.y, tool: payload.tool },
                   lastSeen: Date.now(),
                   isLocal: false,
                 },
               ],
-        }));
+            };
+          }
+          return {
+            users: s.users.map((u) =>
+              !u.isLocal && u.id === key
+                ? {
+                    ...u,
+                    // Upgrade placeholder names with the real profile name.
+                    name: u.name === 'User' ? (profileNameFor(payload.userId) ?? 'User') : u.name,
+                    cursor: { x: payload.x, y: payload.y, tool: payload.tool },
+                    lastSeen: Date.now(),
+                  }
+                : u,
+            ),
+          };
+        });
       });
 
-      const timeout = setTimeout(fail, 3000);
-      socket.once('connect', () => clearTimeout(timeout));
+      // The browser knows about network loss long before a heartbeat times
+      // out (an established WebSocket can sit "open" on a dead link for the
+      // whole ping window). Drop it immediately so edits queue visibly, and
+      // reconnect the moment the network returns instead of waiting for the
+      // next backoff tick.
+      let pausedForOffline = false;
+      const onOffline = () => {
+        if (gen !== generation) return;
+        pausedForOffline = true;
+        socket.disconnect();
+        set((s) => ({ users: s.users.filter((u) => u.isLocal), joinedBoardId: null, status: 'offline' }));
+      };
+      const onOnline = () => {
+        if (gen !== generation) return;
+        if (pausedForOffline || !socket.connected) {
+          pausedForOffline = false;
+          set({ status: 'reconnecting' });
+          socket.connect();
+        }
+      };
+      window.addEventListener('offline', onOffline);
+      window.addEventListener('online', onOnline);
+      detachWindow = () => {
+        window.removeEventListener('offline', onOffline);
+        window.removeEventListener('online', onOnline);
+      };
     },
 
     disconnect: () => {
+      generation++;
+      setLaserSender(null);
       const { socket } = get();
       if (socket) (socket as SocketLike).close();
+      detachWindow?.();
+      detachWindow = null;
       stopSimulation();
       activeBoardId = null;
-      set((s) => ({ users: s.users.filter((u) => u.isLocal), status: 'idle', mode: 'none', socket: null }));
+      set((s) => ({
+        users: s.users.filter((u) => u.isLocal),
+        status: 'idle',
+        mode: 'none',
+        socket: null,
+        joinedBoardId: null,
+        role: null,
+      }));
+    },
+
+    rejoin: () => {
+      const { socket } = get();
+      if (!socket || !activeBoardId || !(socket as SocketLike).connected) return;
+      set({ joinedBoardId: null });
+      join(socket as SocketLike, activeBoardId, generation);
     },
 
     updateLocalCursor: (x, y, tool) => {
-      set((s) => ({
-        users: s.users.map((u) => (u.isLocal ? { ...u, cursor: { x, y, tool }, lastSeen: Date.now() } : u)),
-      }));
+      // Only the outgoing broadcast needs the cursor; writing it into the store
+      // re-rendered every presence consumer on every mouse move.
       broadcastCursor(x, y, tool);
     },
 
     addUser: (user) =>
       set((s) => {
         if (s.users.some((u) => u.id === user.id)) return s;
-        const { name, cursor, color, ...rest } = user;
-        return {
-          users: [
-            ...s.users,
-            {
-              ...rest,
-              name,
-              color: color ?? PRESENCE_COLORS[(s.users.length + s.users.filter((u) => !u.isLocal).length) % PRESENCE_COLORS.length],
-              // Remote arrivals may have no cursor yet — keep it undefined so
-              // the overlay does not paint a phantom arrow at the origin.
-              cursor,
-              isLocal: false,
-            },
-          ],
-        };
+        return { users: [...s.users, { ...user, color: user.color ?? colorForUser(user.id), isLocal: false }] };
       }),
 
-    // The board's own presence entry. MUST be isLocal: true — every other
-    // feature keys off it (cursor emission guard, updateLocalCursor, remote
-    // merge filters), and a false flag here silently breaks live cursors for
-    // everyone (nobody broadcasts cursor:update).
+    // The board's own presence entry. MUST be isLocal: true — remote merge
+    // filters key off it.
     addLocalUser: (user) =>
       set((s) => {
         if (s.users.some((u) => u.isLocal)) return s;
         return {
           users: [
-            { ...user, color: user.color ?? PRESENCE_COLORS[0], isLocal: true },
+            { ...user, color: user.color ?? colorForUser(user.id), isLocal: true },
             ...s.users.filter((u) => u.id !== user.id),
           ],
         };

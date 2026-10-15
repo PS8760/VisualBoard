@@ -54,6 +54,9 @@ textarea,
   --color-paper-2: #f4f3ef;
   --color-paper-3: #ecebe6;
   --color-ink: #1b1a17;
+  /* Hover/pressed state for solid ink (primary) surfaces: darker in light mode,
+     brighter in dark mode so text-paper always keeps its contrast. */
+  --color-ink-hover: #000000;
   --color-ink-2: #4d4c46;
   --color-ink-3: #78766e;
   --color-line: #e5e3dc;
@@ -97,6 +100,7 @@ textarea,
   --color-paper-2: #1e1d1a;
   --color-paper-3: #282621;
   --color-ink: #f3f1eb;
+  --color-ink-hover: #ffffff;
   --color-ink-2: #c7c4bb;
   --color-ink-3: #918e84;
   --color-line: #35332e;
@@ -281,4 +285,71 @@ textarea,
 .theme-toggle-icon-exit {
   transform: rotate(90deg) scale(0.7);
   opacity: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Spatial UI: floating glass islands over the full-bleed canvas.
+ * ------------------------------------------------------------------------- */
+@layer components {
+  .glass {
+    background: color-mix(in oklab, var(--color-paper) 84%, transparent);
+    backdrop-filter: blur(16px) saturate(1.5);
+    -webkit-backdrop-filter: blur(16px) saturate(1.5);
+    border: 1px solid color-mix(in oklab, var(--color-line-2) 75%, transparent);
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* Icon button used across islands. */
+  .island-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 2.25rem;
+    min-width: 2.25rem;
+    border-radius: 0.65rem;
+    color: var(--color-ink-2);
+    transition: background-color 120ms, color 120ms, transform 120ms;
+  }
+  .island-btn:hover {
+    background: var(--color-paper-3);
+    color: var(--color-ink);
+  }
+  .island-btn:active {
+    transform: scale(0.94);
+  }
+  .island-btn:disabled {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+  .island-btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--color-paper);
+    backdrop-filter: none;
+  }
+}
+
+/* Tooltip entrance (floating-ui portal). */
+@keyframes vb-tooltip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.vb-tooltip {
+  animation: vb-tooltip-in 110ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vb-tooltip {
+    animation: none;
+  }
 }

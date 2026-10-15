@@ -1,4 +1,5 @@
 import { client, apiErrorMessage } from './client';
+import { colorForUser } from '../utils';
 import type { CommentItem } from '../types';
 
 export interface BackendComment {
@@ -17,6 +18,7 @@ export interface BackendComment {
 
 export function mapComment(raw: BackendComment): CommentItem {
   const u = raw.users ?? raw.author;
+  const authorId = String(u?.id ?? raw.user_id);
   return {
     id: String(raw.id),
     boardId: String(raw.board_id),
@@ -24,9 +26,9 @@ export function mapComment(raw: BackendComment): CommentItem {
     x: raw.x_position ?? undefined,
     y: raw.y_position ?? undefined,
     author: {
-      id: String(u?.id ?? raw.user_id),
+      id: authorId,
       name: u?.name ?? 'User',
-      color: '#d9480f',
+      color: colorForUser(authorId),
     },
     text: raw.content,
     createdAt: raw.created_at,
@@ -44,7 +46,7 @@ export async function fetchComments(boardId: string): Promise<CommentItem[]> {
 
 export async function createComment(
   boardId: string,
-  payload: { text: string; elementId?: string; x?: number; y?: number },
+  payload: { text: string; elementId?: string; x?: number; y?: number; clientId?: string },
 ): Promise<CommentItem | null> {
   try {
     const { data } = await client.post<{ data?: BackendComment }>(`/boards/${boardId}/comments`, {
@@ -52,6 +54,7 @@ export async function createComment(
       element_id: payload.elementId,
       x: payload.x,
       y: payload.y,
+      clientId: payload.clientId,
     });
     return data?.data ? mapComment(data.data) : null;
   } catch {

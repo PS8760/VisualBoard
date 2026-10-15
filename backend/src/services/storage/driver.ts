@@ -1,3 +1,5 @@
+import type { Readable } from 'node:stream';
+
 /**
  * Storage abstraction for uploaded documents.
  *
@@ -16,6 +18,8 @@ export interface StorageDriver {
   name: string;
   save(key: string, data: Buffer, mimeType: string): Promise<StoredFile>;
   read(key: string): Promise<Buffer | null>;
+  /** Streams the object without buffering it in memory (null when missing). */
+  stream(key: string): Promise<{ body: Readable; size?: number } | null>;
   delete(key: string): Promise<boolean>;
   /** Signed/absolute URL for direct access when the driver supports it. */
   getUrl(key: string): string | null;

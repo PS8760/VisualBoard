@@ -9,6 +9,20 @@ export interface AuthenticatedSocket extends Socket {
   };
 }
 
+/** Acknowledgement returned to the client for every mutating event. */
+export type AckErrorCode =
+  | 'VALIDATION_ERROR'
+  | 'NOT_JOINED'
+  | 'FORBIDDEN'
+  | 'NOT_FOUND'
+  | 'CONFLICT'
+  | 'REJECTED'
+  | 'INTERNAL';
+
+export type AckResponse =
+  | { ok: true; [key: string]: unknown }
+  | { ok: false; code: AckErrorCode; message: string };
+
 export type BoardUsersPayload = Array<{
   id: string;
   userId: number;

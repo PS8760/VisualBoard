@@ -50,7 +50,8 @@ export function mapBoard(raw: BackendBoard): Board {
     ownerId: String(raw.owner_id),
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
-    elements: (raw.elements ?? []).map((el) => el.element_data as unknown as BoardElement),
+    // The row id is authoritative; legacy rows don't repeat it inside element_data.
+    elements: (raw.elements ?? []).map((el) => ({ ...(el.element_data as unknown as BoardElement), id: el.id })),
     members: mapMembers(raw.board_members),
   };
 }
@@ -112,15 +113,6 @@ export async function deleteBoard(boardId: string): Promise<{ ok: boolean; messa
   try {
     await client.delete(`/boards/${boardId}`);
     return { ok: true };
-  } catch (error) {
-    return { ok: false, message: apiErrorMessage(error) };
-  }
-}
-
-export async function arrangeBoard(boardId: string): Promise<{ ok: boolean; positions?: Record<string, { x: number; y: number }>; message?: string }> {
-  try {
-    const { data } = await client.post<{ data?: { positions?: Record<string, { x: number; y: number }> } }>(`/boards/${boardId}/arrange`);
-    return { ok: true, positions: data?.data?.positions };
   } catch (error) {
     return { ok: false, message: apiErrorMessage(error) };
   }

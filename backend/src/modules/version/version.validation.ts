@@ -8,6 +8,7 @@ const snapshotElementSchema = z
 
 export const createVersionSchema = z.object({
   snapshot: z.array(snapshotElementSchema).max(10_000).optional(),
+  label: z.string().trim().min(1).max(120).optional(),
 });
 
 export const versionIdParamSchema = z.object({

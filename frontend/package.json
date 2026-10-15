@@ -13,6 +13,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@floating-ui/react": "0.27.16",
     "@tailwindcss/vite": "^4.3.0",
     "axios": "^1.16.1",
     "clsx": "^2.1.1",

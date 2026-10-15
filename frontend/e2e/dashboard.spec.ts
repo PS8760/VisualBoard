@@ -17,8 +17,9 @@ test.describe('dashboard', () => {
       ({ token, session }) => {
         localStorage.setItem('vb_token', token);
         localStorage.setItem('vb_user', JSON.stringify(session));
+        localStorage.setItem('vb_onboarding_seen', 'true');
       },
-      { token, user },
+      { token, session: user },
     );
 
     await page.goto('/dashboard');
@@ -53,8 +54,9 @@ test.describe('dashboard', () => {
       ({ token, session }) => {
         localStorage.setItem('vb_token', token);
         localStorage.setItem('vb_user', JSON.stringify(session));
+        localStorage.setItem('vb_onboarding_seen', 'true');
       },
-      { token, user },
+      { token, session: user },
     );
 
     await page.goto('/dashboard');

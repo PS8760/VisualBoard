@@ -24,7 +24,7 @@ export default function CTA() {
           <div data-reveal className="mt-9 flex justify-center">
             <Link
               to={isAuth ? '/dashboard' : '/register'}
-              className="group inline-flex h-11 items-center gap-2 rounded-sm bg-ink px-7 text-[14.5px] font-medium text-paper shadow-sm transition-all duration-150 hover:bg-black active:scale-[0.98]"
+              className="group inline-flex h-11 items-center gap-2 rounded-sm bg-ink px-7 text-[14.5px] font-medium text-paper shadow-sm transition-all duration-150 hover:bg-ink-hover active:scale-[0.98]"
             >
               Create a Board
               <ArrowRight

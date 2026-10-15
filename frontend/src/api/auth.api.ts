@@ -13,7 +13,11 @@ export function getStoredUser(): User | null {
   const raw = localStorage.getItem(USER_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as User;
+    const parsed = JSON.parse(raw) as User | null;
+    if (!parsed || typeof parsed !== 'object' || parsed.id === undefined || parsed.id === null) return null;
+    // Ids are compared as strings across the app (board members, presence,
+    // comment authors); sessions written by older builds stored numbers.
+    return { ...parsed, id: String(parsed.id) };
   } catch {
     return null;
   }

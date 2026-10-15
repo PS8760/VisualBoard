@@ -1,6 +1,7 @@
 import prisma from '../../config/prisma.js';
 import { AppError, conflictError, notFoundError } from '../../utils/errors.js';
 import { publicAvatar } from '../user/user.service.js';
+import { cancelBoardSnapshot } from '../version/version.autosnapshot.js';
 import type { Board, BoardMember } from './board.types.js';
 
 export const createBoard = async (ownerId: number, title: string, description?: string | null) => {
@@ -11,25 +12,9 @@ export const createBoard = async (ownerId: number, title: string, description?: 
     await tx.board_members.create({
       data: { board_id: board.id, user_id: ownerId, role: 'owner' },
     });
-    // create initial artifacts: a welcome document, an initial version snapshot, and a welcome comment
-    await tx.documents.create({
-      data: {
-        board_id: board.id,
-        element_id: null,
-        user_id: ownerId,
-        original_name: 'Welcome.txt',
-        stored_name: `welcome-${board.id}-${Date.now()}.txt`,
-        mime_type: 'text/plain',
-        size: 0,
-      },
-    });
-    await tx.versions.create({
-      data: {
-        board_id: board.id,
-        snapshot: { elements: [] },
-        created_by: ownerId,
-      },
-    });
+    // A welcome thread so the comments panel isn't empty. (No placeholder
+    // document or empty version: a metadata row without stored bytes can never
+    // be previewed or downloaded, and an empty snapshot is not restorable.)
     await tx.comments.create({
       data: {
         board_id: board.id,
@@ -85,8 +70,9 @@ export const updateBoard = async (
 };
 
 export const deleteBoard = async (id: number) => {
-  const docs = await prisma.documents.findMany({ where: { board_id: id } });
+  cancelBoardSnapshot(id);
   return prisma.$transaction(async (tx) => {
+    const docs = await tx.documents.findMany({ where: { board_id: id }, select: { stored_name: true } });
     await tx.boards.delete({ where: { id } });
     return docs.map((d) => d.stored_name);
   });
