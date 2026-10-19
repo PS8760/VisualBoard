@@ -4,8 +4,10 @@ export interface AiSuggestion {
   id: string;
   title: string;
   detail: string;
-  category: 'architecture' | 'security' | 'performance' | 'process' | 'product';
+  category: 'architecture' | 'security' | 'performance' | 'reliability' | 'process' | 'product';
   priority: 'high' | 'medium' | 'low';
+  /** Board labels the finding refers to. */
+  elements?: string[];
 }
 
 export interface SuggestionsResponse {

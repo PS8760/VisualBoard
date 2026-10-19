@@ -1,16 +1,14 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Info, MessageSquare, FileText, Sparkles, X, GitBranch, Check, Loader2, AlertTriangle, Wand2, Trash2,
+  Info, MessageSquare, FileText, Sparkles, X, Loader2, Trash2,
 } from 'lucide-react';
-import { toast } from 'sonner';
 import { cn, formatFileSize, timeAgo } from '../../utils';
 import { useBoardStore } from '../../stores/useBoardStore';
 import { useCanvasStore } from '../../stores/useCanvasStore';
 import { useUIStore } from '../../stores/useUIStore';
-import { useSuggestionStore } from '../../stores/useSuggestionStore';
-import { fetchBoardSuggestions, type AiSuggestion } from '../../api/suggestions.api';
-import { SUGGESTION_META } from '../../utils/shortcuts';
+import SuggestionsPanel from './SuggestionsPanel';
+import { useBoardSuggestions } from '../../hooks/useBoardSuggestions';
 import { useAuthStore } from '../../stores/useAuthStore';
 import type { PanelTab, BoardElement, CommentItem } from '../../types';
 
@@ -39,8 +37,8 @@ export default function RightPanel() {
       aria-label="Board panel"
       data-tour="panel"
     >
-      <div className="flex items-center justify-between border-b border-line px-3">
-        <div className="flex gap-0.5" role="tablist" aria-label="Panel sections">
+      <div className="flex items-center justify-between gap-1 overflow-hidden border-b border-line pl-2 pr-1.5">
+        <div className="flex min-w-0" role="tablist" aria-label="Panel sections">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -48,19 +46,19 @@ export default function RightPanel() {
               aria-selected={tab === t.id}
               onClick={() => setTab(t.id)}
               className={cn(
-                'relative flex h-10 items-center gap-1.5 px-2.5 text-[11.5px] font-medium transition-colors',
+                'relative flex h-10 shrink-0 items-center gap-1 px-2 text-[11.5px] font-medium transition-colors',
                 tab === t.id ? 'text-ink' : 'text-ink-3 hover:text-ink-2',
               )}
             >
-              <t.icon size={12} />
               {t.label}
+              {t.id === 'suggestions' && <SuggestionBadge />}
               {tab === t.id && <span className="absolute inset-x-2 bottom-0 h-[2px] rounded-full bg-accent" />}
             </button>
           ))}
         </div>
         <button
           onClick={() => setOpen(false)}
-          className="flex h-7 w-7 items-center justify-center rounded-sm text-ink-3 hover:bg-paper-2 hover:text-ink"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-ink-3 hover:bg-paper-2 hover:text-ink"
           aria-label="Close panel"
         >
           <X size={14} />
@@ -74,6 +72,24 @@ export default function RightPanel() {
         {tab === 'suggestions' && <SuggestionsPanel />}
       </div>
     </motion.aside>
+  );
+}
+
+/** Count of open local suggestions; red when something is critical. */
+function SuggestionBadge() {
+  const { visible } = useBoardSuggestions();
+  if (!visible.length) return null;
+  const critical = visible.some((s) => s.severity === 'high');
+  return (
+    <span
+      className={cn(
+        'min-w-[14px] rounded-full px-[3px] text-center font-mono text-[8.5px] leading-[14px]',
+        critical ? 'bg-danger text-white' : 'bg-paper-3 text-ink-2',
+      )}
+      aria-label={`${visible.length} suggestions`}
+    >
+      {visible.length}
+    </span>
   );
 }
 
@@ -407,176 +423,6 @@ function DocumentsPanel() {
           </span>
         </button>
       ))}
-    </div>
-  );
-}
-
-const CATEGORY_LABEL: Record<AiSuggestion['category'], string> = {
-  architecture: 'architecture',
-  security: 'security',
-  performance: 'performance',
-  process: 'process',
-  product: 'product',
-};
-
-const PRIORITY_LABEL: Record<AiSuggestion['priority'], string> = {
-  high: 'high',
-  medium: 'medium',
-  low: 'low',
-};
-
-function SuggestionsPanel() {
-  const suggestions = useSuggestionStore((s) => s.suggestions);
-  const apply = useSuggestionStore((s) => s.apply);
-  const dismiss = useSuggestionStore((s) => s.dismiss);
-  const boardId = useBoardStore((s) => s.board?.id);
-
-  const [ai, setAi] = useState<AiSuggestion[]>([]);
-  const [aiState, setAiState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
-  const [aiMessage, setAiMessage] = useState<string | null>(null);
-
-  const applySuggestion = (id: string) => {
-    apply(id);
-    toast.success('Suggestion applied', { description: 'Added to the board.' });
-  };
-
-  const runAi = async () => {
-    if (!boardId || aiState === 'loading') return;
-    setAiState('loading');
-    setAiMessage(null);
-    const res = await fetchBoardSuggestions(boardId);
-    if (res.ok && res.data) {
-      setAi(res.data.suggestions);
-      setAiState('done');
-      if (res.data.suggestions.length === 0) {
-        setAiMessage('The board looks solid — no suggestions came back.');
-      }
-    } else {
-      setAiState('error');
-      setAiMessage(res.message ?? 'AI analysis is unavailable right now.');
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="rounded-md border border-line bg-paper p-2.5 shadow-xs">
-        <p className="mono-label text-ink-3">AI analysis</p>
-        <p className="mt-1 text-[11px] leading-relaxed text-ink-3">
-          {aiState === 'done' && ai.length > 0
-            ? 'Reviewing this board for missing pieces, risks and improvements.'
-            : 'Send the board to the AI reviewer for architecture, security and performance feedback.'}
-        </p>
-        {aiState !== 'done' ? (
-          <button
-            onClick={runAi}
-            disabled={aiState === 'loading'}
-            className="mt-2 flex h-7 w-full items-center justify-center gap-1.5 rounded-sm bg-ink text-[11px] font-medium text-paper transition-colors hover:bg-ink-hover disabled:opacity-60"
-          >
-            {aiState === 'loading' ? (
-              <>
-                <Loader2 size={11} className="animate-spin" /> Analysing board…
-              </>
-            ) : (
-              <>
-                <Wand2 size={11} /> Analyse with AI
-              </>
-            )}
-          </button>
-        ) : null}
-
-        {aiState === 'error' && (
-          <p className="mt-2 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-ink-3">
-            <AlertTriangle size={11} className="mt-0.5 shrink-0 text-warning" />
-            {aiMessage}
-          </p>
-        )}
-        {aiState === 'done' && ai.length === 0 && (
-          <p className="mt-2 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-ink-3">
-            <Check size={11} className="mt-0.5 shrink-0 text-success" /> {aiMessage}
-          </p>
-        )}
-      </div>
-
-      {ai.length > 0 && (
-        <div className="space-y-2.5">
-          <p className="mono-label text-ink-3">AI findings</p>
-          {ai.map((s) => (
-            <div key={s.id} className="rounded-md border border-line bg-paper p-2.5 shadow-xs">
-              <div className="flex items-start gap-2">
-                <Sparkles size={13} className="mt-0.5 shrink-0 text-accent" />
-                <div className="min-w-0">
-                  <p className="flex flex-wrap items-center gap-x-2 text-[12px] font-semibold text-ink">
-                    {s.title}
-                    <span className="rounded-sm bg-accent-soft px-1 py-0.5 font-mono text-[8.5px] font-medium text-accent">
-                      {CATEGORY_LABEL[s.category]}
-                    </span>
-                    <span
-                      className={cn(
-                        'rounded-sm px-1 py-0.5 font-mono text-[8.5px] font-medium',
-                        s.priority === 'high' && 'bg-danger-soft text-danger',
-                        s.priority === 'medium' && 'bg-paper-2 text-ink-2',
-                        s.priority === 'low' && 'bg-paper-2 text-ink-3',
-                      )}
-                    >
-                      {PRIORITY_LABEL[s.priority]}
-                    </span>
-                  </p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-ink-3">{s.detail}</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {suggestions.length > 0 && (
-        <div className="space-y-2.5">
-          <p className="mono-label text-ink-3">Local heuristics</p>
-          {suggestions.map((s) => (
-            <div key={s.id} className="rounded-md border border-line bg-paper p-2.5 shadow-xs">
-              <div className="flex items-start gap-2">
-                <GitBranch size={13} className="mt-0.5 shrink-0 text-accent" />
-                <div className="min-w-0">
-                  <p className="flex flex-wrap items-center gap-x-2 text-[12px] font-semibold text-ink">
-                    {s.title}
-                    <span className="rounded-sm bg-accent-soft px-1 py-0.5 font-mono text-[8.5px] font-medium text-accent">
-                      {SUGGESTION_META[s.kind].tag}
-                    </span>
-                  </p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-ink-3">{s.detail}</p>
-                  <p className="mt-1 font-mono text-[9px] text-ink-3">
-                    {s.target.from} → {s.target.to}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-2.5 flex gap-1.5">
-                <button
-                  onClick={() => applySuggestion(s.id)}
-                  className="flex h-6 flex-1 items-center justify-center gap-1 rounded-sm bg-ink text-[10.5px] font-medium text-paper transition-colors hover:bg-ink-hover"
-                >
-                  <Check size={10} /> Apply
-                </button>
-                <button
-                  onClick={() => dismiss(s.id)}
-                  className="h-6 w-14 rounded-sm border border-line-2 text-[10.5px] text-ink-3 transition-colors hover:bg-paper-2 hover:text-ink"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {suggestions.length === 0 && ai.length === 0 && aiState !== 'error' && aiState !== 'loading' && (
-        <div className="rounded-md border border-line bg-paper p-4 text-center shadow-xs">
-          <Check size={16} className="mx-auto mb-2 text-success" />
-          <p className="text-[12.5px] font-medium text-ink-2">Board looks solid</p>
-          <p className="mt-1 text-[11px] leading-relaxed text-ink-3">
-            Local suggestions appear when the architecture hints at something missing — or ask the AI reviewer above.
-          </p>
-        </div>
-      )}
     </div>
   );
 }

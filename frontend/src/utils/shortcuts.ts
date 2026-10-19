@@ -1,4 +1,4 @@
-import type { ElementKind, SuggestionKind, Tool } from '../types';
+import type { ElementKind, Tool } from '../types';
 
 export interface ShortcutDef {
   keys: string[];
@@ -71,41 +71,6 @@ export const ELEMENT_LABEL: Record<ElementKind, string> = {
   comment: 'Comment',
 };
 
-export const SUGGESTION_META: Record<
-  SuggestionKind,
-  { title: string; detail: string; tag: string }
-> = {
-  auth: {
-    title: 'Add authentication layer',
-    detail: 'Protect the API behind token-based auth before exposing it.',
-    tag: 'AUTH',
-  },
-  cache: {
-    title: 'Add caching',
-    detail: 'Frequently read data could sit behind a cache to cut latency.',
-    tag: 'CACHE',
-  },
-  queue: {
-    title: 'Consider a message queue',
-    detail: 'Async work between services stays reliable with a queue.',
-    tag: 'QUEUE',
-  },
-  monitoring: {
-    title: 'Add monitoring',
-    detail: 'Logs, metrics and tracing make production behaviour visible.',
-    tag: 'OBSERV',
-  },
-  database: {
-    title: 'Normalise the data layer',
-    detail: 'The database is the single source of truth — document it.',
-    tag: 'DB',
-  },
-  gateway: {
-    title: 'Route through a gateway',
-    detail: 'A single entry point keeps clients simple and traffic centralised.',
-    tag: 'GATE',
-  },
-};
 
 export const PRESENCE_COLORS = ['#d9480f', '#2563eb', '#7c3aed', '#0d9488', '#c2352c', '#b45309'];
 
