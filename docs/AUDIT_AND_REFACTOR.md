@@ -205,3 +205,19 @@ Tests:
 **Tests.**
 - `test/connectors.test.ts` (12): model round-trip, anchoring, A* orthogonality and clearance, curves, waypoints, projection, self-loop, SVG.
 - `e2e/connectors.spec.ts` (3): routing around an obstacle, binding, toolbar styling and label; double-click waypoint; two-session convergence.
+
+## 9. Smarter suggestions (`frontend/src/services/suggestions.ts`, `suggestionActions.ts`)
+
+**Before.** Substring regexes over all labels ("app" matched "happy"), connectors ignored, targets hard-coded ("Frontend → API"), re-evaluated only when the element count changed, and **Apply only hid the card** while toasting "Added to the board". AI findings had no ids and could not point at anything on the board.
+
+**Engine.** The board is read as a graph: rects/circles are components, classified by whole-word vocabularies (client, gateway, service, auth, database, cache, queue, worker, monitoring, replica); connectors are edges (bound ends, or — for legacy arrows — the shape the end point touches). Notes, text and documents count as *mentions* ("TODO: add JWT auth" satisfies auth). Findings, each with severity, category, evidence ("why") and the element ids involved:
+- client wired straight to a database (high) · client→service with no auth (high/medium) · ≥2 services exposed without a gateway · service→database with no cache · async worker with no queue · database shared by ≥3 components with no replica/backup · ≥3 backend components with no monitoring · hygiene: unconnected shapes, unlabeled shapes, loose arrows, duplicate labels.
+- Ids are `kind:<sorted element ids>`, so a dismissal sticks until the structure changes. A health score (100 − 18/9/4 per high/medium/low) summarises the board.
+
+**Apply edits the board** (`planSuggestion`, pure): *route-through* inserts a node and re-routes the named edges through one shared hub (keeping each edge's style); *add-node* places a node (linked where relevant) in the nearest free slot; *select* frames the shapes. Applied in one macrotask → one undo step; toast has Undo. New nodes are accent-styled and selected on the canvas.
+
+**Panel** (`pages/Board/SuggestionsPanel.tsx`): live analysis via `hooks/useBoardSuggestions.ts`, health ring, severity counts, category filters, cards with severity bar/icon, "Why this?", shape chips that select and frame, dismiss (persisted per board in `localStorage`, with restore). Tab badge shows the count (red when something is critical). Tab icons dropped so four tabs + badge fit the 320px panel.
+
+**AI reviewer.** The backend prompt now includes the drawn connections ("Web App → Postgres") and asks for the exact labels involved; responses carry `id`, `elements[]`, `model`, and a `reliability` category. The panel takes an optional focus prompt, shows loading skeletons, links findings to their shapes, and can add a finding to the board as a sticky note.
+
+**Tests.** `test/suggestions.test.ts` (14), backend unit + integration additions (labels parsing, ids, connections in the prompt), `e2e/suggestions.spec.ts` (3): apply re-wires on the server and undo restores it; dismissals survive reload; chips select on the canvas.

@@ -35,8 +35,16 @@ describe('suggestions service', () => {
         '{"suggestions":[{"title":"Add cache","detail":"Hit Redis","category":"performance","priority":"high"}]}',
       );
       expect(out).toEqual([
-        { title: 'Add cache', detail: 'Hit Redis', category: 'performance', priority: 'high' },
+        { title: 'Add cache', detail: 'Hit Redis', category: 'performance', priority: 'high', elements: [] },
       ]);
+    });
+
+    it('keeps the board labels a suggestion refers to', () => {
+      const out = parseSuggestionJson(
+        '{"suggestions":[{"title":"Cache reads","category":"reliability","elements":["Orders API", 3, "", "Postgres"]}]}',
+      );
+      expect(out[0].elements).toEqual(['Orders API', 'Postgres']);
+      expect(out[0].category).toBe('reliability');
     });
 
     it('strips markdown code fences', () => {
