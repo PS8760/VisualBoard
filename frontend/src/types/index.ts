@@ -140,15 +140,46 @@ export interface CommentItem {
   failed?: boolean;
 }
 
-export type SuggestionKind = 'auth' | 'cache' | 'queue' | 'monitoring' | 'database' | 'gateway';
+export type SuggestionKind =
+  | 'direct-db'
+  | 'auth'
+  | 'gateway'
+  | 'cache'
+  | 'queue'
+  | 'spof'
+  | 'monitoring'
+  | 'orphan'
+  | 'unlabeled'
+  | 'loose-arrow'
+  | 'duplicate';
+
+export type SuggestionCategory = 'security' | 'performance' | 'reliability' | 'observability' | 'structure';
+export type SuggestionSeverity = 'high' | 'medium' | 'low';
+
+/** What "Apply" does to the board (planned by services/suggestionActions). */
+export type SuggestionAction =
+  /** Insert a new node and re-route the given edges through it. */
+  | { type: 'route-through'; edgeIds: string[]; label: string; sub?: string }
+  /** Add a new node (optionally linked to an existing one). */
+  | { type: 'add-node'; label: string; sub?: string; linkTo?: string; near: string[] }
+  /** Nothing to generate — select and frame the elements involved. */
+  | { type: 'select'; ids: string[] };
 
 export interface Suggestion {
+  /** Stable for the same finding on the same elements (used for dismissals). */
   id: string;
   kind: SuggestionKind;
+  category: SuggestionCategory;
+  severity: SuggestionSeverity;
   title: string;
   detail: string;
-  icon: string;
-  target: { from: string; to: string };
+  /** Concrete evidence from this board. */
+  why: string;
+  /** Elements the finding is about (for focusing/highlighting). */
+  elementIds: string[];
+  action: SuggestionAction;
+  /** Button label for the action, e.g. "Insert cache". */
+  actionLabel: string;
 }
 
 export interface BoardVersion {

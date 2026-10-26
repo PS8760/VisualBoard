@@ -1,0 +1,10 @@
+{
+  "name": "VisualBoard \u2013 Build Home",
+  "id": "visualboard-build-home",
+  "api": "1.0.0",
+  "main": "code.js",
+  "editorType": [
+    "figma"
+  ],
+  "documentAccess": "dynamic-page"
+}

@@ -589,15 +589,18 @@ beforeAll(async () => {
     });
 
     it('returns AI suggestions for a board owner', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => ({
-          ok: true,
-          json: async () => ({
-            choices: [{ message: { content: JSON.stringify(fixture) } }],
-          }),
-        })),
-      );
+      const mk = (element: Record<string, unknown>) =>
+        request(app).post(`/api/v1/boards/${suggBoardId}/elements`).set('Authorization', `Bearer ${owner.token}`).send({ element });
+      await mk({ ...VALID_ELEMENT, id: 'sg_web', content: 'Web App' });
+      await mk({ ...VALID_ELEMENT, id: 'sg_db', content: 'Postgres', x: 400 });
+      await mk({ ...VALID_ELEMENT, id: 'sg_link', kind: 'arrow', content: '', points: [100, 0, 400, 0], pointsAbsolute: true, startBinding: { elementId: 'sg_web' }, endBinding: { elementId: 'sg_db' } });
+      const fetchMock = vi.fn(async (_url: string, _init?: { body?: string }) => ({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: JSON.stringify(fixture) } }],
+        }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
       const res = await request(app)
         .post(`/api/v1/boards/${suggBoardId}/suggestions`)
         .set('Authorization', `Bearer ${owner.token}`)
@@ -610,6 +613,12 @@ beforeAll(async () => {
         priority: 'medium',
       });
       expect(res.body.data.suggestions[1].category).toBe('security');
+      expect(res.body.data.suggestions[0].id).toMatch(/^ai_/);
+      expect(res.body.data.suggestions[0].id).not.toBe(res.body.data.suggestions[1].id);
+      expect(typeof res.body.data.model).toBe('string');
+      // The reviewer sees how shapes are wired, not just their labels.
+      const prompt = JSON.parse(fetchMock.mock.calls[0]![1]!.body!).messages[1].content as string;
+      expect(prompt).toContain('Web App → Postgres');
     });
 
     it('rejects suggestions for non-members', async () => {

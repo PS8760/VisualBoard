@@ -6,7 +6,6 @@ import * as boardApi from '../api/board.api';
 import * as commentApi from '../api/comment.api';
 import * as versionApi from '../api/version.api';
 import { colorForUser, uid } from '../utils';
-import { evaluateSuggestions } from '../services/suggestions';
 import { enqueueElementOp, pendingOverlay, resetRealtime, updateSaveStatus, type ElementOp } from '../services/realtime';
 import { useAuthStore } from './useAuthStore';
 
@@ -91,7 +90,6 @@ interface BoardState {
   undo: () => void;
   redo: () => void;
 
-  suggestions: () => ReturnType<typeof evaluateSuggestions>;
 }
 
 const MAX_HISTORY = 100;
@@ -624,11 +622,6 @@ export const useBoardStore = create<BoardState>((set, get) => {
       set({ history: [...history, entry].slice(-MAX_HISTORY), future: future.slice(1) });
       replay(entry, 'after');
       sealed = true;
-    },
-
-    suggestions: () => {
-      const { board } = get();
-      return board ? evaluateSuggestions(board.elements) : [];
     },
   };
 });

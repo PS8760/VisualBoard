@@ -1,4 +1,4 @@
-# Visual White Board
+# Visual White 
 
 Infinite canvas whiteboard with real-time collaboration, comments, version history and document attachments.
 

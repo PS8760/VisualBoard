@@ -178,21 +178,3 @@ export const demoVersions: BoardVersion[] = [
   },
 ];
 
-export const demoSuggestions = [
-  {
-    id: 'sg_monitor',
-    kind: 'monitoring' as const,
-    title: 'Add monitoring',
-    detail: 'Logs, metrics and tracing make production behaviour visible.',
-    icon: 'activity',
-    target: { from: 'API Gateway', to: 'PostgreSQL' },
-  },
-  {
-    id: 'sg_auth',
-    kind: 'auth' as const,
-    title: 'Add authentication layer',
-    detail: 'Protect the API behind token-based auth before exposing it.',
-    icon: 'key',
-    target: { from: 'API Gateway', to: 'Frontend' },
-  },
-];

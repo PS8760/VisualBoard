@@ -24,7 +24,6 @@ import { usePresenceStore } from '../../stores/usePresenceStore';
 import { useUIStore } from '../../stores/useUIStore';
 import { useToolStore } from '../../stores/useToolStore';
 import { useAuthStore } from '../../stores/useAuthStore';
-import { useSuggestionStore } from '../../stores/useSuggestionStore';
 import { useHotkeys } from '../../hooks/useHotkeys';
 import { toast } from 'sonner';
 import { attachRealtimeListeners, pendingCount } from '../../services/realtime';
@@ -118,13 +117,6 @@ export default function Board() {
       usePresenceStore.getState().disconnect();
     };
   }, [boardId]);
-
-  // ---- architecture suggestions (local rule-based engine) ------------------
-  useEffect(() => {
-    if (!board?.id) return;
-    const suggestions = useBoardStore.getState().suggestions();
-    useSuggestionStore.getState().evaluate(suggestions);
-  }, [board?.id, board?.elements.length]);
 
   // ---- seed content for fresh boards ------------------------------------------
   useEffect(() => {
@@ -374,10 +366,7 @@ export default function Board() {
       <BoardSettingsModal boardId={boardId} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <button
         id="arrange-trigger"
-        onClick={() => {
-          useSuggestionStore.getState().showPanel();
-          setRightPanelTab('suggestions');
-        }}
+        onClick={() => setRightPanelTab('suggestions')}
         className="hidden"
         aria-hidden="true"
         tabIndex={-1}
